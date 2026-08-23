@@ -21,6 +21,8 @@ from typing import Any
 SOURCE_REPOSITORY = "Azure/bicep-ptn-aiml-landing-zone"
 TARGET_REPOSITORY = "Azure/terraform-azurerm-avm-ptn-aiml-landing-zone"
 TARGET_REF = "main"
+PAYLOAD_VERSION = "2.0.0"
+HANDOFF_REF = "develop"
 HANDOFF_SCHEMA_PATH = "parity/schemas/terraform-handoff.schema.json"
 INVENTORY_PATH = "parity/inventory.json"
 MAX_DISPATCH_BYTES = 16_384
@@ -37,8 +39,13 @@ ASSESSMENT_ID_PATTERN = re.compile(r"^assessment-[a-z0-9-]+$")
 REF_PATTERN = re.compile(r"^(?:refs/(?:heads|tags)/)?[A-Za-z0-9](?:[A-Za-z0-9._/-]{0,126}[A-Za-z0-9._-])?$")
 
 COMMON_FIELDS = {
+    "payloadVersion",
     "handoffId",
     "handoffPath",
+    "handoffSchemaPath",
+    "handoffCommitSha",
+    "handoffRef",
+    "handoffDigest",
     "provenanceType",
     "provenanceId",
     "capabilityIds",
@@ -108,9 +115,31 @@ def validate_handoff_path(value: Any) -> str:
     return path
 
 
+def validate_schema_path(value: Any) -> str:
+    path = validate_text(value, "handoffSchemaPath", 256)
+    parsed = PurePosixPath(path)
+    require(
+        not parsed.is_absolute()
+        and ".." not in parsed.parts
+        and path.startswith("parity/schemas/")
+        and path.endswith(".schema.json")
+        and "\\" not in path,
+        "handoffSchemaPath must be a JSON Schema file below parity/schemas/",
+    )
+    return path
+
+
+def lf_normalize(content: bytes) -> bytes:
+    return content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def validate_dispatch(payload: Any) -> dict[str, Any]:
     require(isinstance(payload, dict), "client_payload must be an object")
     require(len(canonical_json_bytes(payload)) <= MAX_DISPATCH_BYTES, "client_payload exceeds 16384 bytes")
+    require(
+        payload.get("payloadVersion") == PAYLOAD_VERSION,
+        "unsupported_payload_version: payloadVersion must be 2.0.0",
+    )
 
     provenance_type = payload.get("provenanceType")
     if provenance_type == "baseline-inventory":
@@ -125,10 +154,14 @@ def validate_dispatch(payload: Any) -> dict[str, Any]:
     unknown = sorted(set(payload) - allowed)
     missing = sorted(required - set(payload))
     require(not unknown, f"client_payload contains unknown fields: {', '.join(unknown)}")
-    require(not missing, f"client_payload is missing fields: {', '.join(missing)}")
+    require(not missing, f"incomplete_payload_v2: client_payload is missing fields: {', '.join(missing)}")
 
     validate_text(payload["handoffId"], "handoffId", 128, HANDOFF_ID_PATTERN)
     validate_handoff_path(payload["handoffPath"])
+    validate_schema_path(payload["handoffSchemaPath"])
+    validate_text(payload["handoffCommitSha"], "handoffCommitSha", 40, SHA_PATTERN)
+    validate_ref(payload["handoffRef"], "handoffRef")
+    validate_text(payload["handoffDigest"], "handoffDigest", 64, re.compile(r"^[0-9a-f]{64}$"))
     validate_text(payload["provenanceId"], "provenanceId", 128)
     validate_text(payload["sourceRepository"], "sourceRepository", 128)
     validate_ref(payload["sourceRef"], "sourceRef")
@@ -138,8 +171,14 @@ def validate_dispatch(payload: Any) -> dict[str, Any]:
     validate_text(payload["targetCommitSha"], "targetCommitSha", 40, SHA_PATTERN)
 
     require(payload["sourceRepository"] == SOURCE_REPOSITORY, f"sourceRepository must be {SOURCE_REPOSITORY}")
+    require(payload["handoffRef"] == HANDOFF_REF, f"handoffRef must be {HANDOFF_REF}")
+    require(payload["handoffSchemaPath"] == HANDOFF_SCHEMA_PATH, f"handoffSchemaPath must be {HANDOFF_SCHEMA_PATH}")
     require(payload["targetRepository"] == TARGET_REPOSITORY, f"targetRepository must be {TARGET_REPOSITORY}")
     require(payload["targetRef"] == TARGET_REF, f"targetRef must be {TARGET_REF}")
+    require(
+        payload["handoffCommitSha"] not in {payload["sourceCommitSha"], payload["targetCommitSha"]},
+        "handoffCommitSha must be distinct from implementation baseline commits",
+    )
 
     capabilities = payload["capabilityIds"]
     require(isinstance(capabilities, list), "capabilityIds must be an array")
@@ -154,8 +193,9 @@ def validate_dispatch(payload: Any) -> dict[str, Any]:
         validate_text(payload["inventoryCommitSha"], "inventoryCommitSha", 40, SHA_PATTERN)
         validate_https_github_url(payload["inventoryReviewUrl"], "inventoryReviewUrl", SOURCE_REPOSITORY)
         require(
-            payload["inventoryCommitSha"] not in {payload["sourceCommitSha"], payload["targetCommitSha"]},
-            "inventoryCommitSha must remain distinct from implementation commits",
+            payload["inventoryCommitSha"]
+            not in {payload["handoffCommitSha"], payload["sourceCommitSha"], payload["targetCommitSha"]},
+            "inventoryCommitSha must remain distinct from handoff and implementation commits",
         )
     else:
         validate_text(payload["provenanceId"], "provenanceId", 128, ASSESSMENT_ID_PATTERN)
@@ -326,7 +366,10 @@ class GitHubClient:
     def get_file(self, repository: str, path: str, commit: str, maximum: int) -> bytes:
         encoded_path = urllib.parse.quote(path, safe="/")
         encoded_commit = urllib.parse.quote(commit, safe="")
-        response = self.request("GET", f"/repos/{repository}/contents/{encoded_path}?ref={encoded_commit}")
+        try:
+            response = self.request("GET", f"/repos/{repository}/contents/{encoded_path}?ref={encoded_commit}")
+        except ContractError as exc:
+            raise ContractError(f"artifact_fetch_failed: could not fetch {path} at {commit}: {exc}") from exc
         require(isinstance(response, dict) and response.get("type") == "file", f"{path} is not a file")
         require(response.get("encoding") == "base64" and isinstance(response.get("content"), str), f"{path} has an unsupported encoding")
         try:
@@ -349,6 +392,16 @@ class GitHubClient:
             return
         response = self.request("GET", f"/repos/{repository}/compare/{commit}...{ref_commit}")
         require(response.get("status") in {"ahead", "identical"}, f"{commit} is not reachable from {repository}@{ref}")
+
+    def require_ancestor(self, repository: str, ancestor: str, descendant: str, label: str) -> None:
+        self.resolve_commit(repository, ancestor)
+        if ancestor == descendant:
+            return
+        response = self.request("GET", f"/repos/{repository}/compare/{ancestor}...{descendant}")
+        require(
+            response.get("status") in {"ahead", "identical"},
+            f"{label}: {ancestor} is not an ancestor of {descendant}",
+        )
 
 
 def load_json_bytes(content: bytes, name: str) -> Any:
@@ -409,58 +462,133 @@ def validate_inventory(payload: dict[str, Any], inventory_bytes: bytes, inventor
         require(baseline.get("id") == payload["provenanceId"], "inventory baseline ID does not match provenanceId")
 
 
-def validate_remote_state(client: GitHubClient, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def validate_remote_state(client: GitHubClient, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None, str]:
     target = client.request("GET", f"/repos/{TARGET_REPOSITORY}")
     require(target.get("default_branch") == TARGET_REF, f"{TARGET_REPOSITORY} default branch must be {TARGET_REF}")
     target_head = client.resolve_commit(TARGET_REPOSITORY, TARGET_REF)
-    require(target_head == payload["targetCommitSha"], "targetCommitSha is stale or is not current main")
+    client.require_ancestor(
+        TARGET_REPOSITORY,
+        payload["targetCommitSha"],
+        target_head,
+        "target_baseline_not_ancestor",
+    )
+    client.require_reachable(SOURCE_REPOSITORY, payload["handoffCommitSha"], payload["handoffRef"])
     client.require_reachable(SOURCE_REPOSITORY, payload["sourceCommitSha"], payload["sourceRef"])
 
-    handoff_bytes = client.get_file(SOURCE_REPOSITORY, payload["handoffPath"], payload["sourceCommitSha"], MAX_HANDOFF_BYTES)
-    schema_bytes = client.get_file(SOURCE_REPOSITORY, HANDOFF_SCHEMA_PATH, payload["sourceCommitSha"], MAX_SCHEMA_BYTES)
+    handoff_bytes = client.get_file(
+        SOURCE_REPOSITORY,
+        payload["handoffPath"],
+        payload["handoffCommitSha"],
+        MAX_HANDOFF_BYTES,
+    )
+    schema_bytes = client.get_file(
+        SOURCE_REPOSITORY,
+        payload["handoffSchemaPath"],
+        payload["handoffCommitSha"],
+        MAX_SCHEMA_BYTES,
+    )
+    handoff_digest = hashlib.sha256(lf_normalize(handoff_bytes)).hexdigest()
+    require(handoff_digest == payload["handoffDigest"], "handoff_digest_mismatch: LF-normalized handoff bytes do not match handoffDigest")
     handoff = load_json_bytes(handoff_bytes, payload["handoffPath"])
-    schema = load_json_bytes(schema_bytes, HANDOFF_SCHEMA_PATH)
+    schema = load_json_bytes(schema_bytes, payload["handoffSchemaPath"])
     validate_handoff(payload, handoff, schema)
 
-    inventory_commit = payload.get("inventoryCommitSha", payload["sourceCommitSha"])
-    inventory_bytes = client.get_file(SOURCE_REPOSITORY, INVENTORY_PATH, inventory_commit, MAX_INVENTORY_BYTES)
-    inventory = load_json_bytes(inventory_bytes, INVENTORY_PATH)
-    validate_inventory(payload, inventory_bytes, inventory)
-    return handoff, inventory
+    inventory = None
+    if payload["provenanceType"] == "baseline-inventory":
+        inventory_bytes = client.get_file(
+            SOURCE_REPOSITORY,
+            INVENTORY_PATH,
+            payload["inventoryCommitSha"],
+            MAX_INVENTORY_BYTES,
+        )
+        inventory = load_json_bytes(inventory_bytes, INVENTORY_PATH)
+        validate_inventory(payload, inventory_bytes, inventory)
+    return handoff, inventory, target_head
 
 
 def proposal_marker(handoff_id: str) -> str:
     return f"<!-- parity-handoff-id: {handoff_id} -->"
 
 
-def find_existing(client: GitHubClient, payload: dict[str, Any], handoff: dict[str, Any]) -> tuple[str, str]:
+def artifact_marker(commit: str) -> str:
+    return f"<!-- parity-handoff-commit: {commit} -->"
+
+
+def target_head_marker(commit: str) -> str:
+    return f"<!-- parity-target-head: {commit} -->"
+
+
+def report_artifact_drift(client: GitHubClient, item_url: str, payload: dict[str, Any]) -> None:
+    number = int(item_url.rstrip("/").rsplit("/", 1)[1])
+    drift_marker = f"<!-- parity-artifact-drift: {payload['handoffCommitSha']} -->"
+    comments = client.get_paginated(f"/repos/{TARGET_REPOSITORY}/issues/{number}/comments")
+    if any(drift_marker in (comment.get("body") or "") for comment in comments):
+        return
+    client.request(
+        "POST",
+        f"/repos/{TARGET_REPOSITORY}/issues/{number}/comments",
+        {
+            "body": (
+                f"{drift_marker}\n"
+                "The same `handoffId` was dispatched with a different `handoffCommitSha`. "
+                "This is artifact drift: no second proposal was opened. Review and resolve the "
+                "source handoff history before redispatching."
+            )
+        },
+    )
+
+
+def reconcile_existing(client: GitHubClient, item: dict[str, Any], payload: dict[str, Any]) -> bool:
+    body = item.get("body") or ""
+    if artifact_marker(payload["handoffCommitSha"]) in body:
+        return False
+    report_artifact_drift(client, item["html_url"], payload)
+    return True
+
+
+def find_existing(client: GitHubClient, payload: dict[str, Any], handoff: dict[str, Any]) -> tuple[str, str, bool]:
     recorded_url = handoff.get("terraformPullRequestUrl")
     if recorded_url is not None:
-        return validate_https_github_url(
+        url = validate_https_github_url(
             recorded_url,
             "terraformPullRequestUrl",
             TARGET_REPOSITORY,
-        ), ""
+        )
+        parsed = urllib.parse.urlparse(url)
+        match = re.fullmatch(rf"/{re.escape(TARGET_REPOSITORY)}/pull/([1-9][0-9]*)", parsed.path)
+        require(match is not None and not parsed.query, "terraformPullRequestUrl must identify one target pull request")
+        number = int(match.group(1))
+        item = client.request("GET", f"/repos/{TARGET_REPOSITORY}/pulls/{number}")
+        require(item.get("html_url") == url, "recorded terraformPullRequestUrl did not resolve to the expected pull request")
+        require(
+            proposal_marker(payload["handoffId"]) in (item.get("body") or ""),
+            "recorded terraformPullRequestUrl is missing the handoff marker",
+        )
+        return url, "", reconcile_existing(client, item, payload)
 
     marker = proposal_marker(payload["handoffId"])
-    pulls = client.get_paginated(f"/repos/{TARGET_REPOSITORY}/pulls?state=open&base={TARGET_REF}")
+    pulls = client.get_paginated(f"/repos/{TARGET_REPOSITORY}/pulls?state=all&base={TARGET_REF}")
     matches = [item for item in pulls if marker in (item.get("body") or "")]
     require(len(matches) <= 1, f"multiple active proposals exist for {payload['handoffId']}")
     if matches:
-        return matches[0]["html_url"], ""
+        return matches[0]["html_url"], "", reconcile_existing(client, matches[0], payload)
 
-    issues = client.get_paginated(f"/repos/{TARGET_REPOSITORY}/issues?state=open")
+    issues = client.get_paginated(f"/repos/{TARGET_REPOSITORY}/issues?state=all")
     trackers = [
         item
         for item in issues
         if "pull_request" not in item and marker in (item.get("body") or "")
     ]
     require(len(trackers) <= 1, f"multiple active proposal requests exist for {payload['handoffId']}")
-    return "", trackers[0]["html_url"] if trackers else ""
+    if trackers:
+        return "", trackers[0]["html_url"], reconcile_existing(client, trackers[0], payload)
+    return "", "", False
 
 
-def build_issue(payload: dict[str, Any], handoff: dict[str, Any]) -> dict[str, Any]:
+def build_issue(payload: dict[str, Any], handoff: dict[str, Any], target_head: str) -> dict[str, Any]:
     marker = proposal_marker(payload["handoffId"])
+    handoff_commit_marker = artifact_marker(payload["handoffCommitSha"])
+    current_head_marker = target_head_marker(target_head)
     provenance_url = (
         payload["inventoryReviewUrl"]
         if payload["provenanceType"] == "baseline-inventory"
@@ -468,20 +596,27 @@ def build_issue(payload: dict[str, Any], handoff: dict[str, Any]) -> dict[str, A
     )
     prompt = f"""Implement the approved parity handoff `{payload['handoffId']}` as a focused, reviewable draft pull request.
 
-The handoff is at `https://github.com/{SOURCE_REPOSITORY}/blob/{payload['sourceCommitSha']}/{payload['handoffPath']}`.
-Use target baseline `{payload['targetCommitSha']}` on `main`. Follow `.github/agents/parity-proposal.agent.md`.
+The handoff artifact is at `https://github.com/{SOURCE_REPOSITORY}/blob/{payload['handoffCommitSha']}/{payload['handoffPath']}`.
+Branch from current target `main` head `{target_head}`. Compare against immutable Bicep baseline
+`{payload['sourceCommitSha']}` and Terraform baseline `{payload['targetCommitSha']}`. Follow
+`.github/agents/parity-proposal.agent.md`.
 Open a draft PR only; do not merge, deploy, release, publish, configure credentials, or claim parity.
-Include `{marker}` in the PR body so duplicate dispatches reconcile this proposal.
+Include `{marker}`, `{handoff_commit_marker}`, and `{current_head_marker}` in the PR body so duplicate
+dispatches reconcile this exact proposal.
 """
     body = f"""{marker}
+{handoff_commit_marker}
+{current_head_marker}
 
 ## Approved parity handoff
 
-- Handoff: [`{payload['handoffId']}`](https://github.com/{SOURCE_REPOSITORY}/blob/{payload['sourceCommitSha']}/{payload['handoffPath']})
+- Handoff: [`{payload['handoffId']}`](https://github.com/{SOURCE_REPOSITORY}/blob/{payload['handoffCommitSha']}/{payload['handoffPath']})
+- Handoff artifact commit: `{payload['handoffCommitSha']}` (`{payload['handoffRef']}`)
 - Provenance: [{payload['provenanceType']} `{payload['provenanceId']}`]({provenance_url})
 - Capabilities: {", ".join(f"`{item}`" for item in payload["capabilityIds"])}
-- Bicep implementation commit: `{payload['sourceCommitSha']}`
-- Terraform baseline commit: `{payload['targetCommitSha']}`
+- Bicep comparison baseline: `{payload['sourceCommitSha']}`
+- Terraform comparison baseline: `{payload['targetCommitSha']}`
+- Target `main` head used for the proposal branch: `{target_head}`
 - Approval: {handoff["approval"]["approvalUrl"]}
 
 ## Agent boundary
@@ -504,11 +639,20 @@ must not be presented as deployment evidence or a parity claim.
     }
 
 
-def write_outputs(output_path: str, summary_path: str, proposal_url: str, tracker_url: str, payload: dict[str, Any], duplicate: bool) -> None:
+def write_outputs(
+    output_path: str,
+    summary_path: str,
+    proposal_url: str,
+    tracker_url: str,
+    payload: dict[str, Any],
+    duplicate: bool,
+    artifact_drift: bool,
+) -> None:
     with open(output_path, "a", encoding="utf-8", newline="\n") as stream:
         stream.write(f"proposal_url={proposal_url}\n")
         stream.write(f"tracker_url={tracker_url}\n")
         stream.write(f"duplicate={'true' if duplicate else 'false'}\n")
+        stream.write(f"artifact_drift={'true' if artifact_drift else 'false'}\n")
 
     result_url = proposal_url or tracker_url
     result_label = "Existing draft proposal" if proposal_url else "Proposal request"
@@ -517,6 +661,7 @@ def write_outputs(output_path: str, summary_path: str, proposal_url: str, tracke
         stream.write(f"- Handoff: `{payload['handoffId']}`\n")
         stream.write(f"- Result: [{result_label}]({result_url})\n")
         stream.write(f"- Duplicate delivery reconciled: `{'yes' if duplicate else 'no'}`\n")
+        stream.write(f"- Artifact drift reported: `{'yes' if artifact_drift else 'no'}`\n")
         stream.write("- Evidence boundary: proposal only; no deployment, release, or parity claim was performed.\n")
 
 
@@ -531,16 +676,28 @@ def receive(args: argparse.Namespace) -> None:
     require(args.repository == TARGET_REPOSITORY, f"workflow repository must be {TARGET_REPOSITORY}")
 
     client = GitHubClient(os.environ.get("GH_TOKEN", ""))
-    handoff, _ = validate_remote_state(client, payload)
-    proposal_url, tracker_url = find_existing(client, payload, handoff)
+    handoff, _, target_head = validate_remote_state(client, payload)
+    proposal_url, tracker_url, artifact_drift = find_existing(client, payload, handoff)
     duplicate = bool(proposal_url or tracker_url)
 
     if not duplicate:
-        issue = client.request("POST", f"/repos/{TARGET_REPOSITORY}/issues", build_issue(payload, handoff))
+        issue = client.request(
+            "POST",
+            f"/repos/{TARGET_REPOSITORY}/issues",
+            build_issue(payload, handoff, target_head),
+        )
         tracker_url = issue.get("html_url", "")
         require(bool(tracker_url), "GitHub did not return a proposal request URL")
 
-    write_outputs(args.output, args.summary, proposal_url, tracker_url, payload, duplicate)
+    write_outputs(
+        args.output,
+        args.summary,
+        proposal_url,
+        tracker_url,
+        payload,
+        duplicate,
+        artifact_drift,
+    )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

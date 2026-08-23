@@ -2,36 +2,47 @@
 
 The `parity-proposal.yml` workflow accepts only the `parity-proposal-requested`
 `repository_dispatch` event from the reviewed Bicep parity process. It validates a bounded
-identifier/reference payload, retrieves the full handoff and its JSON Schema from the immutable
-Bicep commit, and requires an approved handoff before requesting a coding-agent draft pull request.
+payload-v2 identifier/reference envelope, retrieves the full handoff and its JSON Schema from the
+immutable handoff artifact commit, and requires an approved handoff before requesting a coding-agent
+draft pull request.
 
 ## Payload contract
 
-Every request contains:
+Every request has `payloadVersion: "2.0.0"` and contains:
 
-- `handoffId` and `handoffPath`;
+- `handoffId`, `handoffPath`, and `handoffDigest`;
+- `handoffSchemaPath` (`parity/schemas/terraform-handoff.schema.json`);
+- `handoffCommitSha` and allow-listed `handoffRef` (`develop` initially);
 - `provenanceType`, `provenanceId`, and `capabilityIds`;
 - `sourceRepository`, `sourceRef`, and `sourceCommitSha`;
 - `targetRepository`, `targetRef`, and `targetCommitSha`; and
 - either `inventoryDigest`, `inventoryCommitSha`, and `inventoryReviewUrl` for baseline provenance,
   or `sourcePrNumber` for alignment-assessment provenance.
 
-Unknown fields, unsafe paths or refs, malformed or oversized values, unsupported repositories,
-non-`main` targets, stale target commits, and commits not reachable from their stated source ref are
-rejected before any issue is created.
+Absent or non-major-2 payload versions fail with `unsupported_payload_version`. Unknown fields,
+unsafe handoff or schema paths, malformed or oversized values, unsupported repositories, arbitrary
+handoff refs, and non-`main` targets are rejected before any fetch or write.
 
-Baseline requests hash the exact bytes of `parity/inventory.json` at `inventoryCommitSha`, verify the
-active baseline and both implementation commits, and require the inventory artifact commit to be
-distinct from the Bicep and Terraform implementation commits. Alignment-assessment requests verify
-the cited capabilities against the inventory at the immutable source commit.
+The receiver proves that `handoffCommitSha` is contained in the allow-listed handoff ref, then
+fetches both the handoff and schema at that commit only. It compares `handoffDigest` with SHA-256 of
+the exact handoff bytes after CRLF/CR-to-LF normalization and validates the handoff against the
+schema from the same commit. `sourceCommitSha` and `targetCommitSha` are immutable comparison
+baselines, never artifact fetch locations. The Terraform baseline must resolve and be an ancestor
+of current upstream `main`; the current `main` head is recorded separately and is the branch point
+for the proposal.
+
+Baseline requests hash the exact bytes of `parity/inventory.json` at `inventoryCommitSha`, verify
+the active baseline and both comparison commits, and require the inventory, handoff, and
+implementation commits to remain distinct. Alignment-assessment requests use the approved handoff
+and reviewed source PR; they do not infer or fetch an inventory from an implementation commit.
 
 ## Idempotency and review
 
-Concurrency is serialized by `handoffId`. The receiver searches active draft proposals and proposal
-requests for the handoff marker and first honors a handoff's recorded `terraformPullRequestUrl`. A
-duplicate dispatch returns the existing URL rather than creating another request. A new request
-assigns the repository's `parity-proposal` custom agent, which may create a focused branch and draft
-pull request only.
+Concurrency and idempotency are keyed by `handoffId`. Proposals carry the handoff ID, artifact
+commit, and target-head markers. A repeat with the same `handoffCommitSha` returns the existing URL.
+A changed artifact commit for the same ID posts one drift notice on the existing proposal and does
+not open a second. A new request assigns the repository's `parity-proposal` custom agent, which may
+create a focused branch from the recorded current `main` head and a draft pull request only.
 
 The target pull request must preserve traceability, compatibility and migration analysis,
 semantic-version impact, both standalone scenarios, AVM checks, exact deferrals, and the `hub-spoke`

@@ -1,4 +1,5 @@
 import base64
+import copy
 import hashlib
 import importlib.util
 import json
@@ -21,12 +22,20 @@ SOURCE_SHA = "1" * 40
 TARGET_SHA = "2" * 40
 INVENTORY_SHA = "3" * 40
 INVENTORY_DIGEST = "4" * 64
+HANDOFF_SHA = "5" * 40
+HANDOFF_DIGEST = "6" * 64
+CURRENT_HEAD_SHA = "7" * 40
 
 
 def baseline_payload():
     return {
+        "payloadVersion": "2.0.0",
         "handoffId": "handoff-sample",
         "handoffPath": "parity/handoffs/ai-foundry/sample.json",
+        "handoffSchemaPath": parity_proposal.HANDOFF_SCHEMA_PATH,
+        "handoffCommitSha": HANDOFF_SHA,
+        "handoffRef": "develop",
+        "handoffDigest": HANDOFF_DIGEST,
         "provenanceType": "baseline-inventory",
         "provenanceId": "baseline-v1.0.0-v1.0.0",
         "capabilityIds": ["ai-foundry-account"],
@@ -127,9 +136,31 @@ class DispatchContractTests(unittest.TestCase):
         with self.assertRaisesRegex(parity_proposal.ContractError, "1..100"):
             parity_proposal.validate_dispatch(payload)
 
+    def test_rejects_v1_absent_or_non_major_two_version_by_named_error(self):
+        for value in (None, "1.0.0", "3.0.0"):
+            payload = baseline_payload()
+            if value is None:
+                payload.pop("payloadVersion")
+            else:
+                payload["payloadVersion"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(
+                parity_proposal.ContractError,
+                "unsupported_payload_version",
+            ):
+                parity_proposal.validate_dispatch(payload)
+
+    def test_requires_all_v2_fields(self):
+        for field in ("handoffSchemaPath", "handoffCommitSha", "handoffRef", "handoffDigest"):
+            payload = baseline_payload()
+            payload.pop(field)
+            with self.subTest(field=field), self.assertRaisesRegex(parity_proposal.ContractError, "missing fields"):
+                parity_proposal.validate_dispatch(payload)
+
     def test_rejects_path_traversal_and_wrong_repository_or_branch(self):
         for field, value in (
             ("handoffPath", "parity/handoffs/../inventory.json"),
+            ("handoffSchemaPath", "parity/schemas/../handoffs/sample.json"),
+            ("handoffRef", "feature/untrusted"),
             ("sourceRepository", "attacker/example"),
             ("targetRepository", "Azure/other"),
             ("targetRef", "develop"),
@@ -143,6 +174,12 @@ class DispatchContractTests(unittest.TestCase):
         payload = baseline_payload()
         payload["inventoryCommitSha"] = payload["sourceCommitSha"]
         with self.assertRaisesRegex(parity_proposal.ContractError, "distinct"):
+            parity_proposal.validate_dispatch(payload)
+
+    def test_requires_distinct_handoff_artifact_commit(self):
+        payload = baseline_payload()
+        payload["handoffCommitSha"] = payload["sourceCommitSha"]
+        with self.assertRaisesRegex(parity_proposal.ContractError, "implementation baseline"):
             parity_proposal.validate_dispatch(payload)
 
     def test_assessment_id_must_match_source_pull_request(self):
@@ -201,6 +238,139 @@ class HandoffAndInventoryTests(unittest.TestCase):
             parity_proposal.validate_inventory(payload, b"{}", inventory)
 
 
+def inventory_for(payload):
+    return {
+        "baseline": {
+            "id": payload["provenanceId"],
+            "status": "active",
+            "source": {"repository": payload["sourceRepository"], "commitSha": payload["sourceCommitSha"]},
+            "terraform": {"repository": payload["targetRepository"], "commitSha": payload["targetCommitSha"]},
+        },
+        "capabilities": [{"id": "ai-foundry-account"}],
+    }
+
+
+class RemoteStateClient:
+    def __init__(self, payload, *, bad_branch=False, bad_ancestor=False, missing_path=None):
+        self.payload = payload
+        self.bad_branch = bad_branch
+        self.bad_ancestor = bad_ancestor
+        self.missing_path = missing_path
+        handoff = approved_handoff(payload)
+        self.handoff_bytes = json.dumps(handoff, indent=2).replace("\n", "\r\n").encode()
+        self.schema_bytes = json.dumps(STRICT_TEST_SCHEMA).encode()
+        inventory = inventory_for(payload)
+        self.inventory_bytes = json.dumps(inventory, indent=2).encode()
+        self.files = {
+            (payload["handoffPath"], payload["handoffCommitSha"]): self.handoff_bytes,
+            (payload["handoffSchemaPath"], payload["handoffCommitSha"]): self.schema_bytes,
+            (parity_proposal.INVENTORY_PATH, payload.get("inventoryCommitSha")): self.inventory_bytes,
+        }
+        self.reachable = []
+        self.ancestor = []
+
+    def request(self, method, path, body=None):
+        if method == "GET" and path == f"/repos/{parity_proposal.TARGET_REPOSITORY}":
+            return {"default_branch": "main"}
+        raise AssertionError((method, path, body))
+
+    def resolve_commit(self, repository, ref):
+        if repository == parity_proposal.TARGET_REPOSITORY and ref == "main":
+            return CURRENT_HEAD_SHA
+        return ref
+
+    def require_ancestor(self, repository, ancestor, descendant, label):
+        self.ancestor.append((repository, ancestor, descendant, label))
+        if self.bad_ancestor:
+            raise parity_proposal.ContractError("target_baseline_not_ancestor")
+
+    def require_reachable(self, repository, commit, ref):
+        self.reachable.append((repository, commit, ref))
+        if self.bad_branch and commit == self.payload["handoffCommitSha"]:
+            raise parity_proposal.ContractError("not reachable")
+
+    def get_file(self, repository, path, commit, maximum):
+        if path == self.missing_path:
+            raise parity_proposal.ContractError("artifact_fetch_failed: 404")
+        value = self.files[(path, commit)]
+        if len(value) > maximum:
+            raise parity_proposal.ContractError("oversized")
+        return value
+
+
+class RemoteStateTests(unittest.TestCase):
+    def valid_client(self):
+        payload = baseline_payload()
+        inventory_bytes = json.dumps(inventory_for(payload), indent=2).encode()
+        payload["inventoryDigest"] = hashlib.sha256(inventory_bytes).hexdigest()
+        client = RemoteStateClient(payload)
+        payload["handoffDigest"] = hashlib.sha256(parity_proposal.lf_normalize(client.handoff_bytes)).hexdigest()
+        client.payload = payload
+        return payload, client
+
+    def test_fetches_handoff_and_schema_only_at_artifact_commit_and_accepts_ancestor(self):
+        payload, client = self.valid_client()
+        handoff, inventory, target_head = parity_proposal.validate_remote_state(client, payload)
+        self.assertEqual(payload["handoffId"], handoff["id"])
+        self.assertEqual(payload["provenanceId"], inventory["baseline"]["id"])
+        self.assertEqual(CURRENT_HEAD_SHA, target_head)
+        self.assertIn(
+            (parity_proposal.SOURCE_REPOSITORY, payload["handoffCommitSha"], "develop"),
+            client.reachable,
+        )
+        self.assertEqual(
+            (
+                parity_proposal.TARGET_REPOSITORY,
+                payload["targetCommitSha"],
+                CURRENT_HEAD_SHA,
+                "target_baseline_not_ancestor",
+            ),
+            client.ancestor[0],
+        )
+
+    def test_alignment_does_not_infer_or_fetch_inventory_from_source_baseline(self):
+        payload = assessment_payload()
+        client = RemoteStateClient(payload)
+        payload["handoffDigest"] = hashlib.sha256(parity_proposal.lf_normalize(client.handoff_bytes)).hexdigest()
+        handoff, inventory, target_head = parity_proposal.validate_remote_state(client, payload)
+        self.assertEqual(payload["handoffId"], handoff["id"])
+        self.assertIsNone(inventory)
+        self.assertEqual(CURRENT_HEAD_SHA, target_head)
+
+    def test_rejects_404_at_handoff_commit(self):
+        payload, client = self.valid_client()
+        client.missing_path = payload["handoffPath"]
+        with self.assertRaisesRegex(parity_proposal.ContractError, "artifact_fetch_failed"):
+            parity_proposal.validate_remote_state(client, payload)
+
+    def test_rejects_handoff_commit_outside_allowlisted_branch(self):
+        payload, client = self.valid_client()
+        client.bad_branch = True
+        with self.assertRaisesRegex(parity_proposal.ContractError, "not reachable"):
+            parity_proposal.validate_remote_state(client, payload)
+
+    def test_lf_normalized_digest_accepts_crlf_but_rejects_changed_bytes(self):
+        payload, client = self.valid_client()
+        parity_proposal.validate_remote_state(client, payload)
+        payload["handoffDigest"] = "0" * 64
+        with self.assertRaisesRegex(parity_proposal.ContractError, "handoff_digest_mismatch"):
+            parity_proposal.validate_remote_state(client, payload)
+
+    def test_rejects_schema_mismatch_from_same_artifact_commit(self):
+        payload, client = self.valid_client()
+        schema = copy.deepcopy(STRICT_TEST_SCHEMA)
+        schema["required"].append("requiredByNewSchema")
+        client.files[(payload["handoffSchemaPath"], payload["handoffCommitSha"])] = json.dumps(schema).encode()
+        with self.assertRaisesRegex(parity_proposal.ContractError, "missing required field"):
+            parity_proposal.validate_remote_state(client, payload)
+
+    def test_rejects_non_ancestor_target_baseline(self):
+        payload, client = self.valid_client()
+        client.bad_ancestor = True
+        with self.assertRaisesRegex(parity_proposal.ContractError, "target_baseline_not_ancestor"):
+            parity_proposal.validate_remote_state(client, payload)
+
+
 class GitHubClientTests(unittest.TestCase):
     def test_request_uses_the_provided_token(self):
         class Response:
@@ -220,18 +390,22 @@ class GitHubClientTests(unittest.TestCase):
 
 
 class FakeGitHubClient:
-    def __init__(self, pulls=None, issues=None):
+    def __init__(self, pulls=None, issues=None, comments=None, pull_detail=None):
         self.pulls = pulls or []
         self.issues = issues or []
+        self.comments = comments or []
+        self.pull_detail = pull_detail
         self.posts = []
 
     def request(self, method, path, body=None):
+        if method == "GET" and "/pulls/" in path:
+            return self.pull_detail
         if method == "GET" and "/pulls?" in path:
             return self.pulls
         if method == "GET" and "/issues?" in path:
             return self.issues
         if method == "POST":
-            self.posts.append(body)
+            self.posts.append((path, body))
             return {"html_url": "https://github.com/Azure/terraform-azurerm-avm-ptn-aiml-landing-zone/issues/99"}
         raise AssertionError((method, path))
 
@@ -240,30 +414,44 @@ class FakeGitHubClient:
             return self.pulls
         if "/issues?" in path:
             return self.issues
+        if "/comments" in path:
+            return self.comments
         raise AssertionError(path)
 
 
 class IdempotencyTests(unittest.TestCase):
     def test_duplicate_dispatch_returns_existing_proposal(self):
         payload = baseline_payload()
-        marker = parity_proposal.proposal_marker(payload["handoffId"])
+        marker = "\n".join(
+            (
+                parity_proposal.proposal_marker(payload["handoffId"]),
+                parity_proposal.artifact_marker(payload["handoffCommitSha"]),
+            )
+        )
         client = FakeGitHubClient(
             pulls=[{"body": marker, "html_url": "https://github.com/Azure/terraform-azurerm-avm-ptn-aiml-landing-zone/pull/42"}]
         )
-        proposal, tracker = parity_proposal.find_existing(client, payload, approved_handoff(payload))
+        proposal, tracker, drift = parity_proposal.find_existing(client, payload, approved_handoff(payload))
         self.assertTrue(proposal.endswith("/pull/42"))
         self.assertEqual("", tracker)
+        self.assertFalse(drift)
         self.assertEqual([], client.posts)
 
     def test_duplicate_dispatch_returns_existing_tracker(self):
         payload = baseline_payload()
-        marker = parity_proposal.proposal_marker(payload["handoffId"])
+        marker = "\n".join(
+            (
+                parity_proposal.proposal_marker(payload["handoffId"]),
+                parity_proposal.artifact_marker(payload["handoffCommitSha"]),
+            )
+        )
         client = FakeGitHubClient(
             issues=[{"body": marker, "html_url": "https://github.com/Azure/terraform-azurerm-avm-ptn-aiml-landing-zone/issues/42"}]
         )
-        proposal, tracker = parity_proposal.find_existing(client, payload, approved_handoff(payload))
+        proposal, tracker, drift = parity_proposal.find_existing(client, payload, approved_handoff(payload))
         self.assertEqual("", proposal)
         self.assertTrue(tracker.endswith("/issues/42"))
+        self.assertFalse(drift)
 
     def test_recorded_proposal_url_wins_without_listing_or_writing(self):
         payload = baseline_payload()
@@ -271,13 +459,61 @@ class IdempotencyTests(unittest.TestCase):
         handoff["terraformPullRequestUrl"] = (
             "https://github.com/Azure/terraform-azurerm-avm-ptn-aiml-landing-zone/pull/41"
         )
-        proposal, tracker = parity_proposal.find_existing(FakeGitHubClient(), payload, handoff)
+        url = handoff["terraformPullRequestUrl"]
+        body = "\n".join(
+            (
+                parity_proposal.proposal_marker(payload["handoffId"]),
+                parity_proposal.artifact_marker(payload["handoffCommitSha"]),
+            )
+        )
+        client = FakeGitHubClient(pull_detail={"html_url": url, "body": body})
+        proposal, tracker, drift = parity_proposal.find_existing(client, payload, handoff)
         self.assertTrue(proposal.endswith("/pull/41"))
         self.assertEqual("", tracker)
+        self.assertFalse(drift)
+
+    def test_recorded_proposal_url_must_carry_handoff_marker(self):
+        payload = baseline_payload()
+        handoff = approved_handoff(payload)
+        url = "https://github.com/Azure/terraform-azurerm-avm-ptn-aiml-landing-zone/pull/41"
+        handoff["terraformPullRequestUrl"] = url
+        client = FakeGitHubClient(
+            pull_detail={
+                "html_url": url,
+                "body": parity_proposal.artifact_marker(payload["handoffCommitSha"]),
+            }
+        )
+        with self.assertRaisesRegex(parity_proposal.ContractError, "missing the handoff marker"):
+            parity_proposal.find_existing(client, payload, handoff)
+
+    def test_changed_artifact_commit_reports_drift_once_and_opens_no_second_proposal(self):
+        payload = baseline_payload()
+        body = "\n".join(
+            (
+                parity_proposal.proposal_marker(payload["handoffId"]),
+                parity_proposal.artifact_marker("9" * 40),
+            )
+        )
+        url = "https://github.com/Azure/terraform-azurerm-avm-ptn-aiml-landing-zone/pull/42"
+        client = FakeGitHubClient(pulls=[{"body": body, "html_url": url}])
+        proposal, tracker, drift = parity_proposal.find_existing(client, payload, approved_handoff(payload))
+        self.assertEqual(url, proposal)
+        self.assertEqual("", tracker)
+        self.assertTrue(drift)
+        self.assertEqual(1, len(client.posts))
+        self.assertIn("artifact drift", client.posts[0][1]["body"].lower())
+
+        drift_marker = f"<!-- parity-artifact-drift: {payload['handoffCommitSha']} -->"
+        client = FakeGitHubClient(
+            pulls=[{"body": body, "html_url": url}],
+            comments=[{"body": drift_marker}],
+        )
+        parity_proposal.find_existing(client, payload, approved_handoff(payload))
+        self.assertEqual([], client.posts)
 
     def test_issue_instructions_create_draft_only_boundary(self):
         payload = baseline_payload()
-        issue = parity_proposal.build_issue(payload, approved_handoff(payload))
+        issue = parity_proposal.build_issue(payload, approved_handoff(payload), CURRENT_HEAD_SHA)
         text = issue["body"] + issue["agent_assignment"]["custom_instructions"]
         self.assertIn("draft pull request", text)
         self.assertIn("do not merge", text.lower())
@@ -285,6 +521,9 @@ class IdempotencyTests(unittest.TestCase):
         self.assertIn("standalone-network-isolated", text)
         self.assertIn("hub-spoke", text)
         self.assertIn(parity_proposal.proposal_marker(payload["handoffId"]), text)
+        self.assertIn(parity_proposal.artifact_marker(payload["handoffCommitSha"]), text)
+        self.assertIn(parity_proposal.target_head_marker(CURRENT_HEAD_SHA), text)
+        self.assertIn("Branch from current target `main` head", text)
 
 
 class WorkflowSecurityTests(unittest.TestCase):
