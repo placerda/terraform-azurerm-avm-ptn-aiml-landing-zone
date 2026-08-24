@@ -31,6 +31,13 @@ baselines, never artifact fetch locations. The Terraform baseline must resolve a
 of current upstream `main`; the current `main` head is recorded separately and is the branch point
 for the proposal.
 
+The approved handoff's `approvalUrl` is semantically constrained to a canonical pull-request URL in
+the declared source repository. It may point to the PR itself or to a canonical GitHub issue-comment,
+pull-request-review, or review-comment fragment on that PR. Baseline `inventoryReviewUrl` values must
+identify the canonical source-repository PR without a query or fragment. Unrelated repositories,
+issues, arbitrary paths, credentials, queries, and malformed fragments are rejected without requiring
+additional network permissions.
+
 Baseline requests hash the exact bytes of `parity/inventory.json` at `inventoryCommitSha`, verify
 the active baseline and both comparison commits, and require the inventory, handoff, and
 implementation commits to remain distinct. Alignment-assessment requests use the approved handoff
@@ -46,8 +53,34 @@ create a focused branch from the recorded current `main` head and a draft pull r
 
 The target pull request must preserve traceability, compatibility and migration analysis,
 semantic-version impact, both standalone scenarios, AVM checks, exact deferrals, and the `hub-spoke`
-exclusion. No automatic reverse write updates the Bicep inventory; recording the proposal URL there
-requires a separately reviewed source-repository change.
+exclusion.
+
+This repository remains an AVM Pattern Module. PMNFR2's guidance that a Pattern Module **SHOULD** use
+AVM Resource Modules still exists; this repository consciously adopts a local exception for parity
+work. Parity implementations **SHOULD** prefer direct `Azure/azapi` resources and focused local
+submodules. An AVM Resource Module is allowed only when its concrete benefit is documented against
+the added contract, state, release, and capability constraints. External non-AVM modules are
+prohibited.
+
+Every generated tracker starts with merge evidence status `blocked`. It remains blocked until:
+
+- `avm pre-commit` has completed and all resulting changes are committed;
+- `avm pr-check` passes from that clean commit;
+- every applicable unit, integration, and E2E tier passes, with explicit rationale for any
+  non-applicable tier; and
+- upstream managed AVM CI shows successful PR validation and every applicable unit, integration,
+  and E2E job.
+
+Unavailable, pending, skipped, or failed evidence is blocked, not success. A passing static plan or
+local validation is not a substitute for an applicable Azure-backed tier or upstream managed CI.
+
+For a proposal from a fork, credentialed managed CI continues to use the official security flow. A
+module owner reviews the fork changes, creates an upstream `release/*` branch from `main`, merges the
+fork PR into that branch, and opens a release-branch-to-`main` PR for managed validation and tests.
+The receiver does not enable credentials or the managed workflow directly on an untrusted fork.
+
+No automatic reverse write updates the Bicep inventory; recording the proposal URL there requires a
+separately reviewed source-repository change.
 
 Static validation and Terraform plans are proposal evidence only. This workflow does not merge,
 deploy, release, configure credentials, or claim parity.
@@ -64,3 +97,6 @@ deploy, release, configure credentials, or claim parity.
   `standalone-network-isolated`.
 - Keep `hub-spoke` and arbitrary optional-feature combinations deferred unless a later approved
   handoff explicitly changes those exclusions.
+- Approval URL validation proves repository and canonical PR/review URL shape only. The receiver
+  cannot prove from the bounded handoff metadata that `approvedBy` authored the linked GitHub review
+  or that the reviewer was authorized. Maintainers must review that residual risk before activation.

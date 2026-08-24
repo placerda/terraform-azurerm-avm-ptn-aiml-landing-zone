@@ -95,6 +95,42 @@ def validate_https_github_url(value: Any, field: str, repository: str) -> str:
     return text
 
 
+def validate_github_pull_request_url(
+    value: Any,
+    field: str,
+    repository: str,
+    *,
+    allow_evidence_fragment: bool = False,
+) -> str:
+    text = validate_text(value, field, 512)
+    parsed = urllib.parse.urlparse(text)
+    require(
+        parsed.scheme == "https"
+        and parsed.netloc == "github.com"
+        and not parsed.username
+        and not parsed.password,
+        f"{field} must be a canonical https://github.com URL",
+    )
+    require(
+        re.fullmatch(rf"/{re.escape(repository)}/pull/[1-9][0-9]*", parsed.path) is not None,
+        f"{field} must identify a pull request in {repository}",
+    )
+    require(not parsed.params and not parsed.query, f"{field} contains prohibited URL components")
+    if allow_evidence_fragment:
+        require(
+            not parsed.fragment
+            or re.fullmatch(
+                r"(?:issuecomment|pullrequestreview)-[1-9][0-9]*|discussion_r[1-9][0-9]*",
+                parsed.fragment,
+            )
+            is not None,
+            f"{field} contains an unsupported review evidence fragment",
+        )
+    else:
+        require(not parsed.fragment, f"{field} must identify the pull request without a fragment")
+    return text
+
+
 def validate_ref(value: Any, field: str) -> str:
     ref = validate_text(value, field, 128, REF_PATTERN)
     require(".." not in ref and "//" not in ref and "@{" not in ref and not ref.endswith("."), f"{field} is unsafe")
@@ -191,7 +227,11 @@ def validate_dispatch(payload: Any) -> dict[str, Any]:
         validate_text(payload["provenanceId"], "provenanceId", 128, BASELINE_ID_PATTERN)
         validate_text(payload["inventoryDigest"], "inventoryDigest", 64, re.compile(r"^[0-9a-f]{64}$"))
         validate_text(payload["inventoryCommitSha"], "inventoryCommitSha", 40, SHA_PATTERN)
-        validate_https_github_url(payload["inventoryReviewUrl"], "inventoryReviewUrl", SOURCE_REPOSITORY)
+        validate_github_pull_request_url(
+            payload["inventoryReviewUrl"],
+            "inventoryReviewUrl",
+            SOURCE_REPOSITORY,
+        )
         require(
             payload["inventoryCommitSha"]
             not in {payload["handoffCommitSha"], payload["sourceCommitSha"], payload["targetCommitSha"]},
@@ -427,6 +467,13 @@ def validate_handoff(payload: dict[str, Any], handoff: Any, schema: Any) -> None
         }
         require(handoff[side] == expected, f"handoff {side} reference does not match dispatch")
 
+    validate_github_pull_request_url(
+        handoff["approval"].get("approvalUrl"),
+        "handoff approval.approvalUrl",
+        payload["sourceRepository"],
+        allow_evidence_fragment=True,
+    )
+
     provenance = handoff["provenance"]
     require(provenance["type"] == payload["provenanceType"], "handoff provenance type does not match dispatch")
     id_field = "baselineId" if payload["provenanceType"] == "baseline-inventory" else "assessmentId"
@@ -603,6 +650,16 @@ Branch from current target `main` head `{target_head}`. Compare against immutabl
 Open a draft PR only; do not merge, deploy, release, publish, configure credentials, or claim parity.
 Include `{marker}`, `{handoff_commit_marker}`, and `{current_head_marker}` in the PR body so duplicate
 dispatches reconcile this exact proposal.
+
+This repository remains an AVM Pattern Module and consciously takes a local exception to PMNFR2's
+Resource Module SHOULD: prefer direct Azure/azapi resources and focused local submodules. Compose an
+AVM Resource Module only with a documented concrete benefit; external non-AVM modules are prohibited.
+
+The proposal is blocked from merge until `avm pre-commit`, clean-commit `avm pr-check`, every
+applicable unit/integration/E2E tier, and upstream managed AVM CI all pass. Unavailable, pending,
+skipped, or failed evidence must remain blocked, never success-shaped. For a fork, preserve the
+official owner-reviewed upstream `release/*`-branch-to-`main` flow for credentialed managed CI; never
+run that CI with credentials directly on the untrusted fork.
 """
     body = f"""{marker}
 {handoff_commit_marker}
@@ -623,9 +680,29 @@ dispatches reconcile this exact proposal.
 
 Create one focused branch and one draft pull request against `main`. Preserve compatibility or
 document migration and semantic-version impact. Cover `standalone-standard` and
-`standalone-network-isolated` independently. Run target-native and AVM checks, report exact
-deferrals, and keep `hub-spoke` excluded. Static checks and plans are proposal evidence only; they
-must not be presented as deployment evidence or a parity claim.
+`standalone-network-isolated` independently. Follow the local Pattern Module composition decision:
+PMNFR2's Resource Module **SHOULD** remains acknowledged, while parity work prefers direct
+`Azure/azapi` resources and focused local submodules. An AVM Resource Module requires a documented
+concrete benefit; external non-AVM modules are prohibited. Report exact deferrals and keep
+`hub-spoke` excluded. Static checks and plans are proposal evidence only; they must not be presented
+as deployment evidence or a parity claim.
+
+## Mandatory pre-merge evidence
+
+Evidence status: **blocked** until every item is complete.
+
+- [ ] `avm pre-commit` completed and all resulting changes were reviewed and committed.
+- [ ] `avm pr-check` passed from the clean proposal commit.
+- [ ] Every applicable `avm test unit`, `avm test integration`, and `avm test e2e` tier passed;
+      each non-applicable tier has an explicit rationale.
+- [ ] Upstream managed AVM CI links show successful PR validation and every applicable unit,
+      integration, and E2E job.
+- [ ] For a fork proposal, an owner followed the official security flow: review the fork, create an
+      upstream `release/*` branch from `main`, merge into it, and validate a release-branch-to-`main`
+      PR. Credentialed managed CI was not enabled directly on the fork.
+
+If any required local or managed check is unavailable, pending, skipped, or failed, leave its box
+unchecked and keep the proposal status **blocked**. Do not describe it as successful or merge-ready.
 """
     return {
         "title": f"Parity proposal: {payload['handoffId']}",
@@ -653,6 +730,7 @@ def write_outputs(
         stream.write(f"tracker_url={tracker_url}\n")
         stream.write(f"duplicate={'true' if duplicate else 'false'}\n")
         stream.write(f"artifact_drift={'true' if artifact_drift else 'false'}\n")
+        stream.write("evidence_status=blocked\n")
 
     result_url = proposal_url or tracker_url
     result_label = "Existing draft proposal" if proposal_url else "Proposal request"
@@ -662,6 +740,10 @@ def write_outputs(
         stream.write(f"- Result: [{result_label}]({result_url})\n")
         stream.write(f"- Duplicate delivery reconciled: `{'yes' if duplicate else 'no'}`\n")
         stream.write(f"- Artifact drift reported: `{'yes' if artifact_drift else 'no'}`\n")
+        stream.write(
+            "- Merge evidence status: `blocked` pending successful pre-commit, clean-commit "
+            "PR check, applicable test tiers, and upstream managed AVM CI.\n"
+        )
         stream.write("- Evidence boundary: proposal only; no deployment, release, or parity claim was performed.\n")
 
 

@@ -182,6 +182,19 @@ class DispatchContractTests(unittest.TestCase):
         with self.assertRaisesRegex(parity_proposal.ContractError, "implementation baseline"):
             parity_proposal.validate_dispatch(payload)
 
+    def test_inventory_review_url_must_be_canonical_source_pull_request(self):
+        for value in (
+            "https://github.com/Azure/other/pull/100",
+            "https://github.com/Azure/bicep-ptn-aiml-landing-zone/issues/100",
+            "https://github.com/Azure/bicep-ptn-aiml-landing-zone/pull/100/",
+            "https://github.com/Azure/bicep-ptn-aiml-landing-zone/pull/100?diff=split",
+            "https://github.com/Azure/bicep-ptn-aiml-landing-zone/pull/100#issuecomment-1",
+        ):
+            payload = baseline_payload()
+            payload["inventoryReviewUrl"] = value
+            with self.subTest(value=value), self.assertRaises(parity_proposal.ContractError):
+                parity_proposal.validate_dispatch(payload)
+
     def test_assessment_id_must_match_source_pull_request(self):
         payload = assessment_payload()
         payload["sourcePrNumber"] = 137
@@ -198,6 +211,37 @@ class HandoffAndInventoryTests(unittest.TestCase):
         handoff["approval"]["status"] = "pending"
         with self.assertRaisesRegex(parity_proposal.ContractError, "approved"):
             parity_proposal.validate_handoff(payload, handoff, STRICT_TEST_SCHEMA)
+
+    def test_accepts_canonical_source_pull_request_approval_evidence(self):
+        payload = baseline_payload()
+        for fragment in (
+            "",
+            "#issuecomment-5375280499",
+            "#pullrequestreview-123",
+            "#discussion_r456",
+        ):
+            handoff = approved_handoff(payload)
+            handoff["approval"]["approvalUrl"] = (
+                "https://github.com/Azure/bicep-ptn-aiml-landing-zone/pull/147" + fragment
+            )
+            with self.subTest(fragment=fragment):
+                parity_proposal.validate_handoff(payload, handoff, STRICT_TEST_SCHEMA)
+
+    def test_rejects_unrelated_or_malformed_approval_evidence_url(self):
+        payload = baseline_payload()
+        for value in (
+            "https://github.com/Azure/other/pull/147",
+            "https://github.com/Azure/bicep-ptn-aiml-landing-zone/issues/147",
+            "https://example.com/Azure/bicep-ptn-aiml-landing-zone/pull/147",
+            "https://github.com/Azure/bicep-ptn-aiml-landing-zone/pull/0",
+            "https://github.com/Azure/bicep-ptn-aiml-landing-zone/pull/147/",
+            "https://github.com/Azure/bicep-ptn-aiml-landing-zone/pull/147?diff=split",
+            "https://github.com/Azure/bicep-ptn-aiml-landing-zone/pull/147#files",
+        ):
+            handoff = approved_handoff(payload)
+            handoff["approval"]["approvalUrl"] = value
+            with self.subTest(value=value), self.assertRaises(parity_proposal.ContractError):
+                parity_proposal.validate_handoff(payload, handoff, STRICT_TEST_SCHEMA)
 
     def test_schema_validator_rejects_unknown_handoff_fields(self):
         payload = baseline_payload()
@@ -524,6 +568,34 @@ class IdempotencyTests(unittest.TestCase):
         self.assertIn(parity_proposal.artifact_marker(payload["handoffCommitSha"]), text)
         self.assertIn(parity_proposal.target_head_marker(CURRENT_HEAD_SHA), text)
         self.assertIn("Branch from current target `main` head", text)
+        self.assertIn("PMNFR2", text)
+        self.assertIn("direct Azure/azapi resources", text)
+        self.assertIn("external non-AVM modules are prohibited", text)
+        self.assertIn("avm pre-commit", text)
+        self.assertIn("avm pr-check", text)
+        self.assertIn("avm test unit", text)
+        self.assertIn("avm test integration", text)
+        self.assertIn("avm test e2e", text)
+        self.assertIn("upstream managed AVM CI", text)
+        self.assertIn("release/*", text)
+        self.assertIn("status **blocked**", text)
+
+    def test_outputs_report_blocked_merge_evidence(self):
+        payload = baseline_payload()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            summary = Path(directory) / "summary"
+            parity_proposal.write_outputs(
+                str(output),
+                str(summary),
+                "",
+                "https://github.com/Azure/terraform-azurerm-avm-ptn-aiml-landing-zone/issues/99",
+                payload,
+                False,
+                False,
+            )
+            self.assertIn("evidence_status=blocked", output.read_text(encoding="utf-8"))
+            self.assertIn("Merge evidence status: `blocked`", summary.read_text(encoding="utf-8"))
 
 
 class WorkflowSecurityTests(unittest.TestCase):
@@ -563,6 +635,24 @@ class WorkflowSecurityTests(unittest.TestCase):
                 self.assertIn(expected, docs)
             else:
                 self.assertIn(expected, self.agent)
+
+        docs = (ROOT / "docs" / "parity-proposal.md").read_text(encoding="utf-8")
+        combined = (self.agent + docs).lower()
+        for expected in (
+            "PMNFR2",
+            "direct `Azure/azapi` resources",
+            "external non-AVM modules",
+            "avm pre-commit",
+            "avm pr-check",
+            "upstream managed AVM CI",
+            "release/*",
+            "status `blocked`",
+        ):
+            self.assertIn(expected.lower(), combined)
+
+    def test_workflow_reports_blocked_evidence_status(self):
+        self.assertIn("steps.proposal.outputs.evidence_status", self.workflow)
+        self.assertIn("Merge evidence status:", self.workflow)
 
 
 if __name__ == "__main__":

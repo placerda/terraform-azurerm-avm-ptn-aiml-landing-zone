@@ -38,8 +38,23 @@ The draft pull request must:
 - explain compatibility, defaults, migration, deprecation, and semantic-version impact;
 - implement and test `standalone-standard` and `standalone-network-isolated` independently;
 - follow `AGENTS.md`, `CONTRIBUTING.md`, the repository's AVM skills, and current AVM specifications;
-- run the smallest target-native test tiers plus `avm pre-commit`, and report `avm pr-check` from a
-  clean commit when available;
+- preserve this repository's explicit Pattern Module composition decision: acknowledge PMNFR2's
+  Resource Module **SHOULD**, but prefer direct `Azure/azapi` resources and focused local submodules;
+  use an AVM Resource Module only with a documented concrete benefit, and never use an external
+  non-AVM module;
+- run every applicable `avm test unit`, `avm test integration`, and `avm test e2e` tier, documenting
+  why a tier is not applicable rather than silently omitting it;
+- run `avm pre-commit`, commit all resulting changes, and then pass `avm pr-check` from that clean
+  commit;
+- obtain successful upstream managed AVM CI evidence for PR validation and every applicable unit,
+  integration, and E2E job before merge;
+- keep the proposal's merge-evidence status `blocked` whenever a required command or managed CI job
+  is unavailable, pending, skipped, or failed; never present unavailable evidence as success or
+  merge readiness;
+- for a fork proposal, preserve the official security flow: an owner reviews the code, creates an
+  upstream `release/*` branch from `main`, merges the fork PR into that branch, then opens the
+  release-branch-to-`main` PR that runs managed credentialed CI; never expose credentials to or
+  enable the managed workflow directly on an untrusted fork;
 - list every exact deferral, blocked provider capability, skipped live-Azure check, pre-existing
   failure, and residual risk;
 - preserve the handoff's `hub-spoke` and arbitrary optional-feature-combination exclusions; and

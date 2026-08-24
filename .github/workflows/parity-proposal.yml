@@ -41,6 +41,7 @@ jobs:
 
       - name: Report proposal
         env:
+          EVIDENCE_STATUS: ${{ steps.proposal.outputs.evidence_status }}
           PROPOSAL_URL: ${{ steps.proposal.outputs.proposal_url }}
           TRACKER_URL: ${{ steps.proposal.outputs.tracker_url }}
         run: |
@@ -49,3 +50,4 @@ jobs:
           else
             echo "Proposal request: $TRACKER_URL"
           fi
+          echo "Merge evidence status: $EVIDENCE_STATUS"
