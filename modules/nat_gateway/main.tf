@@ -31,7 +31,7 @@ resource "azapi_resource" "public_ip" {
       name = "Standard"
       tier = "Regional"
     }
-    zones = sort(tolist(var.zones))
+    zones = length(var.zones) == 0 ? ["1", "2", "3"] : sort(tolist(var.zones))
   }
   tags = var.tags
 
@@ -72,7 +72,7 @@ resource "azapi_resource" "this" {
     sku = {
       name = "Standard"
     }
-    zones = sort(tolist(var.zones))
+    zones = length(var.zones) == 0 ? null : sort(tolist(var.zones))
   }
   tags = var.tags
 

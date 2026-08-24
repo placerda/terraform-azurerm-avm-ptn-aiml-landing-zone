@@ -41,13 +41,13 @@ variable "idle_timeout_in_minutes" {
 
 variable "zones" {
   type        = set(string)
-  default     = ["1", "2", "3"]
-  description = "The availability zones for the NAT Gateway and its public IP address."
+  default     = []
+  description = "Zero or one availability zone for the Standard NAT Gateway. With no explicit NAT zone, its Standard public IP is zone-redundant across zones 1, 2, and 3; with one zone, the public IP uses the same zone."
   nullable    = false
 
   validation {
-    condition     = length(var.zones) > 0 && alltrue([for zone in var.zones : contains(["1", "2", "3"], zone)])
-    error_message = "zones must contain one or more of \"1\", \"2\", or \"3\"."
+    condition     = length(var.zones) <= 1 && alltrue([for zone in var.zones : contains(["1", "2", "3"], zone)])
+    error_message = "zones must be empty or contain exactly one of \"1\", \"2\", or \"3\" for the Standard NAT Gateway SKU."
   }
 }
 

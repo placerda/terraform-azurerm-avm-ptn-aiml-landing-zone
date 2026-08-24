@@ -20,7 +20,6 @@ run "creates_managed_nat_gateway_with_public_ip" {
       create = "30m"
       delete = "30m"
     }
-    zones = ["1"]
   }
 
   assert {
@@ -44,6 +43,11 @@ run "creates_managed_nat_gateway_with_public_ip" {
   }
 
   assert {
+    condition     = azapi_resource.this.body.zones == null && length(azapi_resource.public_ip.body.zones) == 3 && alltrue([for zone in ["1", "2", "3"] : contains(azapi_resource.public_ip.body.zones, zone)])
+    error_message = "The Standard NAT Gateway must default to no explicit zone and its Standard public IP must default to zone redundancy."
+  }
+
+  assert {
     condition     = azapi_resource.this.body.properties.publicIpAddresses[0].id == azapi_resource.public_ip.id
     error_message = "The NAT Gateway must associate its managed public IP address."
   }
@@ -57,6 +61,37 @@ run "creates_managed_nat_gateway_with_public_ip" {
     condition     = output.resource_id == azapi_resource.this.id
     error_message = "The focused submodule must export the managed NAT Gateway resource ID."
   }
+}
+
+run "creates_single_zone_standard_nat_gateway" {
+  command = plan
+
+  variables {
+    location       = "eastus"
+    name           = "nat-unit-test"
+    parent_id      = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-unit-test"
+    public_ip_name = "nat-unit-test-pip"
+    zones          = ["1"]
+  }
+
+  assert {
+    condition     = azapi_resource.this.body.sku.name == "Standard" && azapi_resource.this.body.zones[0] == "1" && azapi_resource.public_ip.body.zones[0] == "1"
+    error_message = "The module must place both Standard resources in the one explicitly configured availability zone."
+  }
+}
+
+run "rejects_multiple_standard_nat_gateway_zones" {
+  command = plan
+
+  variables {
+    location       = "eastus"
+    name           = "nat-unit-test"
+    parent_id      = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-unit-test"
+    public_ip_name = "nat-unit-test-pip"
+    zones          = ["1", "2"]
+  }
+
+  expect_failures = [var.zones]
 }
 
 run "rejects_invalid_parent_id" {

@@ -630,7 +630,7 @@ variable "nat_gateway_definition" {
     resource_group_name     = optional(string)
     idle_timeout_in_minutes = optional(number, 4)
     subnet_keys             = optional(set(string), ["JumpboxSubnet"])
-    zones                   = optional(set(string), ["1", "2", "3"])
+    zones                   = optional(set(string), [])
     tags                    = optional(map(string))
     resource_types = optional(object({
       network_nat_gateways        = optional(string)
@@ -662,7 +662,7 @@ Configuration object for optional standalone NAT Gateway egress.
 - `resource_group_name` - (Optional) Resource group for the created NAT Gateway. Defaults to the module resource group.
 - `idle_timeout_in_minutes` - (Optional) Idle timeout for the created NAT Gateway. Default is 4.
 - `subnet_keys` - (Optional) Keys from `vnet_definition.subnets` or the built-in subnet set that receive the NAT Gateway association. Default is `["JumpboxSubnet"]`.
-- `zones` - (Optional) Availability zones for the created NAT Gateway and public IP.
+- `zones` - (Optional) Zero or one availability zone for the created Standard NAT Gateway. Defaults to no explicit NAT zone and a zone-redundant Standard public IP; when one zone is set, the public IP uses the same zone.
 - `tags` - (Optional) Tags for the created NAT Gateway and public IP.
 - `resource_types` - (Optional) AzAPI resource type and API-version overrides passed to the focused NAT Gateway submodule.
 - `retry` - (Optional) Retry configuration applied to the NAT Gateway and public IP AzAPI resources.
@@ -681,8 +681,8 @@ DESCRIPTION
     error_message = "nat_gateway_definition.idle_timeout_in_minutes must be between 4 and 120."
   }
   validation {
-    condition     = length(var.nat_gateway_definition.zones) > 0 && alltrue([for zone in var.nat_gateway_definition.zones : contains(["1", "2", "3"], zone)])
-    error_message = "nat_gateway_definition.zones must contain one or more of \"1\", \"2\", or \"3\"."
+    condition     = length(var.nat_gateway_definition.zones) <= 1 && alltrue([for zone in var.nat_gateway_definition.zones : contains(["1", "2", "3"], zone)])
+    error_message = "nat_gateway_definition.zones must be empty or contain exactly one of \"1\", \"2\", or \"3\" for the Standard NAT Gateway SKU."
   }
   validation {
     condition = alltrue(flatten([

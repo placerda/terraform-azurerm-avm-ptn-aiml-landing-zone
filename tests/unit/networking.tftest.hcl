@@ -152,7 +152,6 @@ run "managed_nat_gateway_association_shape_is_plan_known" {
     nat_gateway_definition = {
       deploy      = true
       subnet_keys = ["JumpboxSubnet"]
-      zones       = ["1"]
     }
   }
 
@@ -165,6 +164,25 @@ run "managed_nat_gateway_association_shape_is_plan_known" {
     condition     = contains(keys(local.deployed_subnets.JumpboxSubnet), "nat_gateway")
     error_message = "Managed NAT Gateway association must remain plan-known even when the managed resource ID is not known until apply."
   }
+
+  assert {
+    condition     = length(var.nat_gateway_definition.zones) == 0
+    error_message = "Managed Standard NAT Gateway configuration must default to no explicit availability zone."
+  }
+}
+
+run "rejects_multiple_standard_nat_gateway_zones" {
+  command = plan
+
+  variables {
+    flag_platform_landing_zone = false
+    nat_gateway_definition = {
+      deploy = true
+      zones  = ["1", "2"]
+    }
+  }
+
+  expect_failures = [var.nat_gateway_definition]
 }
 
 run "rejects_unknown_private_dns_zone_key" {

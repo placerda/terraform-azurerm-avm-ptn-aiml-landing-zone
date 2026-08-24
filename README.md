@@ -17,7 +17,7 @@ Copy the example that best matches your environment, then replace `source = "../
 
 ## Networking controls
 
-Standalone deployments (`flag_platform_landing_zone = false`) can create an AzAPI-managed NAT Gateway with a Standard static public IP, or reuse an existing NAT Gateway, and select the workload subnets that receive it. They can also reuse an existing route table, supply an external firewall next hop, add custom routes, enable Bastion native-client tunneling, restrict Application Gateway ingress source prefixes, and supply individual existing Private DNS zone IDs.
+Standalone deployments (`flag_platform_landing_zone = false`) can create an AzAPI-managed Standard NAT Gateway with a Standard static public IP, or reuse an existing NAT Gateway, and select the workload subnets that receive it. The NAT Gateway has no explicit availability zone by default, while its public IP is zone-redundant; set `nat_gateway_definition.zones` to a single zone when both resources must use that zone. They can also reuse an existing route table, supply an external firewall next hop, add custom routes, enable Bastion native-client tunneling, restrict Application Gateway ingress source prefixes, and supply individual existing Private DNS zone IDs.
 
 Platform landing zone behavior remains unchanged: the module does not create or associate the standalone NAT Gateway or route table when `flag_platform_landing_zone = true`. Reverse hub peering remains configurable through `vnet_definition.vnet_peering_configuration`; set `create_reverse_peering = false` when the hub-to-spoke peering is platform-owned.
 
@@ -2200,7 +2200,7 @@ Description: Configuration object for optional standalone NAT Gateway egress.
 - `resource_group_name` - (Optional) Resource group for the created NAT Gateway. Defaults to the module resource group.
 - `idle_timeout_in_minutes` - (Optional) Idle timeout for the created NAT Gateway. Default is 4.
 - `subnet_keys` - (Optional) Keys from `vnet_definition.subnets` or the built-in subnet set that receive the NAT Gateway association. Default is `["JumpboxSubnet"]`.
-- `zones` - (Optional) Availability zones for the created NAT Gateway and public IP.
+- `zones` - (Optional) Zero or one availability zone for the created Standard NAT Gateway. Defaults to no explicit NAT zone and a zone-redundant Standard public IP; when one zone is set, the public IP uses the same zone.
 - `tags` - (Optional) Tags for the created NAT Gateway and public IP.
 - `resource_types` - (Optional) AzAPI resource type and API-version overrides passed to the focused NAT Gateway submodule.
 - `retry` - (Optional) Retry configuration applied to the NAT Gateway and public IP AzAPI resources.
@@ -2219,7 +2219,7 @@ object({
     resource_group_name     = optional(string)
     idle_timeout_in_minutes = optional(number, 4)
     subnet_keys             = optional(set(string), ["JumpboxSubnet"])
-    zones                   = optional(set(string), ["1", "2", "3"])
+    zones                   = optional(set(string), [])
     tags                    = optional(map(string))
     resource_types = optional(object({
       network_nat_gateways        = optional(string)

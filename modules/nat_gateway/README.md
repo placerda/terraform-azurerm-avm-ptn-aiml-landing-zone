@@ -148,19 +148,11 @@ Default: `null`
 
 ### <a name="input_zones"></a> [zones](#input\_zones)
 
-Description: The availability zones for the NAT Gateway and its public IP address.
+Description: Zero or one availability zone for the Standard NAT Gateway. With no explicit NAT zone, its Standard public IP is zone-redundant across zones 1, 2, and 3; with one zone, the public IP uses the same zone.
 
 Type: `set(string)`
 
-Default:
-
-```json
-[
-  "1",
-  "2",
-  "3"
-]
-```
+Default: `[]`
 
 ## Outputs
 
