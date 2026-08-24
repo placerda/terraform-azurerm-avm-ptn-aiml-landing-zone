@@ -30,22 +30,13 @@ locals {
     }
     if identity.container_registry_pull
   }
-  security_genai_key_vault_role_assignments = merge(
-    {
-      deployment_user_kv_admin = {
-        role_definition_id_or_name = "Key Vault Administrator"
-        principal_id               = local.security_deployment_principal_id
-        principal_type             = var.security_definition.deployment_principal_type
-      }
-    },
-    {
-      for key, identity in var.security_definition.workload_managed_identities :
-      "security_workload_${key}_secrets_user" => {
-        role_definition_id_or_name = "Key Vault Secrets User"
-        principal_id               = identity.principal_id
-        principal_type             = "ServicePrincipal"
-      }
-      if identity.key_vault_secrets_user
+  security_genai_key_vault_role_assignments = {
+    for key, identity in var.security_definition.workload_managed_identities :
+    "security_workload_${key}_secrets_user" => {
+      role_definition_id_or_name = "Key Vault Secrets User"
+      principal_id               = identity.principal_id
+      principal_type             = "ServicePrincipal"
     }
-  )
+    if identity.key_vault_secrets_user
+  }
 }

@@ -40,7 +40,7 @@ These settings are used across the examples to help deployments succeed in polic
 
 ## Identity and RBAC automation
 
-The module preserves the existing Key Vault Administrator grant for the deployment principal and now creates that assignment through the Key Vault module's `role_assignments` interface. By default, the current AzureRM client object ID remains the deployment principal.
+The module preserves the existing Key Vault Administrator grant for the deployment principal at its legacy root resource address. By default, the current AzureRM client object ID remains the deployment principal.
 
 Use `security_definition` to opt into additional data-plane roles for the deployment principal or for existing workload managed identities:
 
@@ -65,7 +65,9 @@ AI Foundry project and cross-service role assignments remain owned by the nested
 
 ### Upgrade behavior
 
-The deployment-principal Key Vault assignment moved from the root module into the Key Vault module. A declarative `moved` block preserves the existing Terraform state address, so no manual state command is expected for the default upgrade path. Defaults, including the broad Key Vault Administrator grant and Foundry authentication settings, are unchanged.
+The deployment-principal Key Vault assignment remains at `azurerm_role_assignment.deployment_user_kv_admin[0]`. Keeping the legacy root address avoids a state-move collision when an existing consumer already uses the arbitrary `deployment_user_kv_admin` key in `genai_key_vault_definition.role_assignments`. No manual state command is required for this upgrade, and defaults, including the broad Key Vault Administrator grant and Foundry authentication settings, are unchanged.
+
+Moving this assignment into the Key Vault module, or converting it to an AzAPI-backed local submodule, is deferred until a breaking release can provide an explicit import or state-migration path for every affected address.
 
 <!-- markdownlint-disable MD033 -->
 ## Requirements
@@ -97,6 +99,7 @@ The following resources are used by this module:
 - [azapi_resource_action.purge_ai_foundry](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource_action) (resource)
 - [azurerm_network_security_rule.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/network_security_rule) (resource)
 - [azurerm_resource_group.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/resource_group) (resource)
+- [azurerm_role_assignment.deployment_user_kv_admin](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/role_assignment) (resource)
 - [azurerm_virtual_hub_connection.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/virtual_hub_connection) (resource)
 - [modtm_telemetry.telemetry](https://registry.terraform.io/providers/azure/modtm/latest/docs/resources/telemetry) (resource)
 - [random_integer.zone_index](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/integer) (resource)

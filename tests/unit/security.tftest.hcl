@@ -32,6 +32,7 @@ run "default_security_preserves_key_vault_administrator" {
 
   plan_options {
     target = [
+      azurerm_role_assignment.deployment_user_kv_admin,
       module.app_configuration,
       module.avm_res_keyvault_vault,
       module.containerregistry,
@@ -45,17 +46,17 @@ run "default_security_preserves_key_vault_administrator" {
   }
 
   assert {
-    condition     = length(local.genai_key_vault_role_assignments) == 1
-    error_message = "The default security configuration must create only the preserved deployment-principal Key Vault assignment."
+    condition     = length(local.genai_key_vault_role_assignments) == 0
+    error_message = "The default security configuration must not duplicate the preserved root Key Vault assignment in the module role map."
   }
 
   assert {
-    condition     = local.genai_key_vault_role_assignments["deployment_user_kv_admin"].role_definition_id_or_name == "Key Vault Administrator"
-    error_message = "The default deployment-principal role must remain Key Vault Administrator."
+    condition     = azurerm_role_assignment.deployment_user_kv_admin[0].role_definition_name == "Key Vault Administrator"
+    error_message = "The default deployment-principal role must remain Key Vault Administrator at the legacy root address."
   }
 
   assert {
-    condition     = local.genai_key_vault_role_assignments["deployment_user_kv_admin"].principal_id == "00000000-0000-0000-0000-000000000002"
+    condition     = azurerm_role_assignment.deployment_user_kv_admin[0].principal_id == "00000000-0000-0000-0000-000000000002"
     error_message = "The default Key Vault assignment must use the current deployment principal."
   }
 
@@ -153,8 +154,48 @@ run "managed_identity_roles_are_opt_in_and_consumer_maps_are_preserved" {
   }
 
   assert {
-    condition     = local.genai_key_vault_role_assignments["deployment_user_kv_admin"].principal_id == "10000000-0000-0000-0000-000000000001"
-    error_message = "An explicit deployment principal must replace the current-client default for the preserved Key Vault grant."
+    condition     = local.security_deployment_principal_id == "10000000-0000-0000-0000-000000000001"
+    error_message = "An explicit deployment principal must replace the current-client default."
+  }
+}
+
+run "consumer_key_matching_legacy_label_has_a_distinct_state_address" {
+  command = plan
+
+  plan_options {
+    target = [
+      azurerm_role_assignment.deployment_user_kv_admin,
+      module.avm_res_keyvault_vault,
+    ]
+  }
+
+  variables {
+    location            = "eastus"
+    resource_group_name = "rg-security-colliding-key"
+    vnet_definition     = {}
+    genai_key_vault_definition = {
+      role_assignments = {
+        deployment_user_kv_admin = {
+          role_definition_id_or_name = "Reader"
+          principal_id               = "30000000-0000-0000-0000-000000000004"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.deployment_user_kv_admin[0].role_definition_name == "Key Vault Administrator"
+    error_message = "The preserved root assignment must remain the Key Vault Administrator grant."
+  }
+
+  assert {
+    condition     = local.genai_key_vault_role_assignments["deployment_user_kv_admin"].role_definition_id_or_name == "Reader"
+    error_message = "A consumer must be able to retain the arbitrary deployment_user_kv_admin module key without being overwritten."
+  }
+
+  assert {
+    condition     = length(local.security_genai_key_vault_role_assignments) == 0 && length(local.genai_key_vault_role_assignments) == 1
+    error_message = "The default grant must exist only at the root address while the colliding module key remains consumer-owned."
   }
 }
 
