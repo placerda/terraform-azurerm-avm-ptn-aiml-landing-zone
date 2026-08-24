@@ -43,7 +43,7 @@ locals {
   deployed_subnets = {
     for subnet_name, subnet in local.subnets : subnet_name => merge(
       subnet,
-      local.nat_gateway_resource_id != null && contains(var.nat_gateway_definition.subnet_keys, subnet_name) ? {
+      local.nat_gateway_association_enabled && contains(var.nat_gateway_definition.subnet_keys, subnet_name) ? {
         nat_gateway = {
           id = local.nat_gateway_resource_id
         }
@@ -116,26 +116,26 @@ locals {
       name = "privatelink.cognitiveservices.azure.com"
     }
   }
-  private_dns_zones = var.flag_platform_landing_zone == false ? {
+  private_dns_zones = var.flag_platform_landing_zone == false && var.private_dns_zones.existing_zones_resource_group_resource_id == null ? {
     for key, value in local.private_dns_zone_map : key => value
     if !contains(keys(var.private_dns_zones.existing_zone_resource_ids), key)
   } : {}
   private_dns_zones_existing = { for key, value in local.private_dns_zone_map : key => {
     name        = value.name
-    resource_id = lookup(var.private_dns_zones.existing_zone_resource_ids, key, "${coalesce(var.private_dns_zones.existing_zones_resource_group_resource_id, "notused")}/providers/Microsoft.Network/privateDnsZones/${value.name}")
+    resource_id = contains(keys(var.private_dns_zones.existing_zone_resource_ids), key) ? var.private_dns_zones.existing_zone_resource_ids[key] : "${var.private_dns_zones.existing_zones_resource_group_resource_id}/providers/Microsoft.Network/privateDnsZones/${value.name}"
     }
-    if var.flag_platform_landing_zone || contains(keys(var.private_dns_zones.existing_zone_resource_ids), key)
+    if var.private_dns_zones.existing_zones_resource_group_resource_id != null || contains(keys(var.private_dns_zones.existing_zone_resource_ids), key)
   }
   private_dns_zone_resource_ids = {
     for key, value in local.private_dns_zone_map : key => (
       contains(keys(var.private_dns_zones.existing_zone_resource_ids), key) ? var.private_dns_zones.existing_zone_resource_ids[key] :
-      var.flag_platform_landing_zone ? local.private_dns_zones_existing[key].resource_id : module.private_dns_zones[key].resource_id
+      var.private_dns_zones.existing_zones_resource_group_resource_id != null ? local.private_dns_zones_existing[key].resource_id : module.private_dns_zones[key].resource_id
     )
   }
   # Build the for_each map using only the (statically known) keys of the source maps so the
   # resulting map keys are known at plan time. Apply-time values (e.g. zone resource IDs derived
   # from an existing resource group) are placed in the map values only.
-  private_dns_zones_existing_vnet_links = var.flag_platform_landing_zone ? {
+  private_dns_zones_existing_vnet_links = !var.flag_platform_landing_zone ? {
     for pair in setproduct(keys(local.private_dns_zones_existing), keys(local.virtual_network_links)) :
     "${pair[0]}-${pair[1]}" => {
       zone_resource_id                       = local.private_dns_zones_existing[pair[0]].resource_id
@@ -154,6 +154,9 @@ locals {
     id = local.firewall_route_table_resource_id
   } : null
   nat_gateway_name = var.nat_gateway_definition.name != null ? var.nat_gateway_definition.name : (var.name_prefix != null ? "${var.name_prefix}-natgw" : "ai-alz-natgw")
+  nat_gateway_association_enabled = !var.flag_platform_landing_zone && (
+    var.nat_gateway_definition.resource_id != null || var.nat_gateway_definition.deploy
+  )
   nat_gateway_resource_id = !var.flag_platform_landing_zone ? (
     var.nat_gateway_definition.resource_id != null ? var.nat_gateway_definition.resource_id : try(module.nat_gateway[0].resource_id, null)
   ) : null

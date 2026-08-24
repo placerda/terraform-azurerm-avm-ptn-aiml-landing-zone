@@ -632,6 +632,25 @@ variable "nat_gateway_definition" {
     subnet_keys             = optional(set(string), ["JumpboxSubnet"])
     zones                   = optional(set(string), ["1", "2", "3"])
     tags                    = optional(map(string))
+    resource_types = optional(object({
+      network_nat_gateways        = optional(string)
+      network_public_ip_addresses = optional(string)
+    }), {})
+    retry = optional(object({
+      error_message_regex  = list(string)
+      interval_seconds     = optional(number)
+      max_interval_seconds = optional(number)
+    }))
+    timeouts = optional(object({
+      create = optional(string)
+      delete = optional(string)
+      read   = optional(string)
+      update = optional(string)
+    }))
+    ignore_body_changes = optional(object({
+      network_nat_gateways        = optional(list(string), [])
+      network_public_ip_addresses = optional(list(string), [])
+    }), {})
   })
   default     = {}
   description = <<DESCRIPTION
@@ -644,7 +663,11 @@ Configuration object for optional standalone NAT Gateway egress.
 - `idle_timeout_in_minutes` - (Optional) Idle timeout for the created NAT Gateway. Default is 4.
 - `subnet_keys` - (Optional) Keys from `vnet_definition.subnets` or the built-in subnet set that receive the NAT Gateway association. Default is `["JumpboxSubnet"]`.
 - `zones` - (Optional) Availability zones for the created NAT Gateway and public IP.
-- `tags` - (Optional) Tags for the created NAT Gateway.
+- `tags` - (Optional) Tags for the created NAT Gateway and public IP.
+- `resource_types` - (Optional) AzAPI resource type and API-version overrides passed to the focused NAT Gateway submodule.
+- `retry` - (Optional) Retry configuration applied to the NAT Gateway and public IP AzAPI resources.
+- `timeouts` - (Optional) Per-operation timeouts applied to the NAT Gateway and public IP AzAPI resources.
+- `ignore_body_changes` - (Optional) Body-relative dot-notation paths ignored for each AzAPI resource. Ignored configuration is not sent to Azure until its path is removed, and changes take effect only after apply.
 
 NAT Gateway creation and association are disabled when `flag_platform_landing_zone` is true. Setting `resource_id` takes precedence over `deploy`.
 DESCRIPTION
@@ -652,6 +675,22 @@ DESCRIPTION
   validation {
     condition     = var.nat_gateway_definition.resource_id == null || can(provider::azapi::parse_resource_id("Microsoft.Network/natGateways", var.nat_gateway_definition.resource_id))
     error_message = "nat_gateway_definition.resource_id must be a valid NAT Gateway resource ID."
+  }
+  validation {
+    condition     = var.nat_gateway_definition.idle_timeout_in_minutes >= 4 && var.nat_gateway_definition.idle_timeout_in_minutes <= 120
+    error_message = "nat_gateway_definition.idle_timeout_in_minutes must be between 4 and 120."
+  }
+  validation {
+    condition     = length(var.nat_gateway_definition.zones) > 0 && alltrue([for zone in var.nat_gateway_definition.zones : contains(["1", "2", "3"], zone)])
+    error_message = "nat_gateway_definition.zones must contain one or more of \"1\", \"2\", or \"3\"."
+  }
+  validation {
+    condition = alltrue(flatten([
+      for paths in values(var.nat_gateway_definition.ignore_body_changes) : [
+        for path in paths : trimspace(path) != ""
+      ]
+    ]))
+    error_message = "nat_gateway_definition.ignore_body_changes paths must be non-empty strings."
   }
 }
 
@@ -731,9 +770,9 @@ variable "private_dns_zones" {
   description = <<DESCRIPTION
 Configuration object for Private DNS Zones and their network links.
 
-- `azure_policy_pe_zone_linking_enabled` - (Optional) Whether Azure Policy is used to enable private endpoint dns zone linking when using a platform landing zone (platform landing zone flag = true). Default is true.
-- `existing_zones_resource_group_resource_id` - (Optional) Resource group resource id where existing Private DNS Zones are located.
-- `existing_zone_resource_ids` - (Optional) Map of granular existing Private DNS zone resource IDs keyed by the canonical zone keys exposed by this module. Entries override the resource-group-derived IDs.
+- `azure_policy_pe_zone_linking_enabled` - (Optional) Whether Azure Policy manages private endpoint DNS zone groups. When true, private endpoint consumers do not attach DNS zone groups. Default is true.
+- `existing_zones_resource_group_resource_id` - (Optional) Resource group resource ID containing the complete canonical set of existing Private DNS Zones. In standalone mode the module creates links from these zones to the managed or BYO virtual network. In platform landing-zone mode the platform owns those links.
+- `existing_zone_resource_ids` - (Optional) Granular existing Private DNS zone resource IDs keyed by canonical zone key. Entries override resource-group-derived IDs. In standalone mode the module links supplied zones to the managed or BYO virtual network; in platform landing-zone mode it does not create links.
 - `allow_internet_resolution_fallback` - (Optional) Whether to allow fallback to internet resolution for Private DNS Zone network links. Default is false.
 - `network_links` - (Optional) Map of network links to create for Private DNS Zones. The map key is deliberately arbitrary to avoid issues where map keys may be unknown at plan time.
   - `vnetlinkname` - The name of the virtual network link.
@@ -747,6 +786,82 @@ DESCRIPTION
       can(provider::azapi::parse_resource_id("Microsoft.Network/privateDnsZones", resource_id))
     ])
     error_message = "Each private_dns_zones.existing_zone_resource_ids value must be a valid Private DNS zone resource ID."
+  }
+  validation {
+    condition     = var.private_dns_zones.existing_zones_resource_group_resource_id == null || can(provider::azapi::parse_resource_id("Microsoft.Resources/resourceGroups", var.private_dns_zones.existing_zones_resource_group_resource_id))
+    error_message = "private_dns_zones.existing_zones_resource_group_resource_id must be a valid resource group resource ID."
+  }
+  validation {
+    condition = length(setsubtract(
+      toset(keys(var.private_dns_zones.existing_zone_resource_ids)),
+      toset([
+        "ai_foundry_ai_services_zone",
+        "ai_foundry_cognitive_services_zone",
+        "ai_foundry_openai_zone",
+        "ai_search_zone",
+        "apim_zone",
+        "app_configuration_zone",
+        "container_registry_zone",
+        "cosmos_analytical_zone",
+        "cosmos_cassandra_zone",
+        "cosmos_gremlin_zone",
+        "cosmos_mongo_zone",
+        "cosmos_postgres_zone",
+        "cosmos_sql_zone",
+        "cosmos_table_zone",
+        "key_vault_zone",
+        "storage_blob_zone",
+        "storage_dlfs_zone",
+        "storage_file_zone",
+        "storage_queue_zone",
+        "storage_table_zone",
+        "storage_web_zone",
+      ])
+    )) == 0
+    error_message = "private_dns_zones.existing_zone_resource_ids contains an unsupported zone key."
+  }
+  validation {
+    condition = !var.flag_platform_landing_zone || var.private_dns_zones.existing_zones_resource_group_resource_id != null || length(setsubtract(
+      toset([
+        "ai_foundry_ai_services_zone",
+        "ai_foundry_cognitive_services_zone",
+        "ai_foundry_openai_zone",
+        "ai_search_zone",
+        "apim_zone",
+        "app_configuration_zone",
+        "container_registry_zone",
+        "cosmos_analytical_zone",
+        "cosmos_cassandra_zone",
+        "cosmos_gremlin_zone",
+        "cosmos_mongo_zone",
+        "cosmos_postgres_zone",
+        "cosmos_sql_zone",
+        "cosmos_table_zone",
+        "key_vault_zone",
+        "storage_blob_zone",
+        "storage_dlfs_zone",
+        "storage_file_zone",
+        "storage_queue_zone",
+        "storage_table_zone",
+        "storage_web_zone",
+      ]),
+      toset(keys(var.private_dns_zones.existing_zone_resource_ids))
+    )) == 0
+    error_message = "Platform landing-zone mode requires existing_zones_resource_group_resource_id or existing_zone_resource_ids entries for every canonical Private DNS zone."
+  }
+  validation {
+    condition = alltrue([
+      for link in values(var.private_dns_zones.network_links) :
+      can(provider::azapi::parse_resource_id("Microsoft.Network/virtualNetworks", link.vnetid))
+    ])
+    error_message = "Each private_dns_zones.network_links vnetid must be a valid virtual network resource ID."
+  }
+  validation {
+    condition = alltrue([
+      for link in values(var.private_dns_zones.network_links) :
+      contains(["Default", "NxDomainRedirect"], link.resolutionPolicy)
+    ])
+    error_message = "Each private_dns_zones.network_links resolutionPolicy must be \"Default\" or \"NxDomainRedirect\"."
   }
 }
 

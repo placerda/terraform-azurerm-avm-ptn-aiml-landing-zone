@@ -17,9 +17,11 @@ Copy the example that best matches your environment, then replace `source = "../
 
 ## Networking controls
 
-Standalone deployments (`flag_platform_landing_zone = false`) can create or reuse a NAT Gateway and select the workload subnets that receive it. They can also reuse an existing route table, supply an external firewall next hop, add custom routes, enable Bastion native-client tunneling, restrict Application Gateway ingress source prefixes, and supply individual existing Private DNS zone IDs.
+Standalone deployments (`flag_platform_landing_zone = false`) can create an AzAPI-managed NAT Gateway with a Standard static public IP, or reuse an existing NAT Gateway, and select the workload subnets that receive it. They can also reuse an existing route table, supply an external firewall next hop, add custom routes, enable Bastion native-client tunneling, restrict Application Gateway ingress source prefixes, and supply individual existing Private DNS zone IDs.
 
 Platform landing zone behavior remains unchanged: the module does not create or associate the standalone NAT Gateway or route table when `flag_platform_landing_zone = true`. Reverse hub peering remains configurable through `vnet_definition.vnet_peering_configuration`; set `create_reverse_peering = false` when the hub-to-spoke peering is platform-owned.
+
+Private DNS zone ownership differs by deployment mode. In standalone mode, zones supplied through `private_dns_zones.existing_zone_resource_ids` or `existing_zones_resource_group_resource_id` remain externally owned, while this module creates their links to the managed or BYO VNet. In platform landing-zone mode, the platform owns both the existing zones and their VNet links, so this module does not create duplicate links. When `azure_policy_pe_zone_linking_enabled = true`, Azure Policy continues to own private endpoint DNS zone groups.
 
 ## Policy-restricted environments
 
@@ -51,7 +53,7 @@ The following requirements are needed by this module:
 
 - <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (>= 1.9, < 2.0)
 
-- <a name="requirement_azapi"></a> [azapi](#requirement\_azapi) (~> 2.4)
+- <a name="requirement_azapi"></a> [azapi](#requirement\_azapi) (~> 2.12)
 
 - <a name="requirement_azurerm"></a> [azurerm](#requirement\_azurerm) (~> 4.0)
 
@@ -2199,7 +2201,11 @@ Description: Configuration object for optional standalone NAT Gateway egress.
 - `idle_timeout_in_minutes` - (Optional) Idle timeout for the created NAT Gateway. Default is 4.
 - `subnet_keys` - (Optional) Keys from `vnet_definition.subnets` or the built-in subnet set that receive the NAT Gateway association. Default is `["JumpboxSubnet"]`.
 - `zones` - (Optional) Availability zones for the created NAT Gateway and public IP.
-- `tags` - (Optional) Tags for the created NAT Gateway.
+- `tags` - (Optional) Tags for the created NAT Gateway and public IP.
+- `resource_types` - (Optional) AzAPI resource type and API-version overrides passed to the focused NAT Gateway submodule.
+- `retry` - (Optional) Retry configuration applied to the NAT Gateway and public IP AzAPI resources.
+- `timeouts` - (Optional) Per-operation timeouts applied to the NAT Gateway and public IP AzAPI resources.
+- `ignore_body_changes` - (Optional) Body-relative dot-notation paths ignored for each AzAPI resource. Ignored configuration is not sent to Azure until its path is removed, and changes take effect only after apply.
 
 NAT Gateway creation and association are disabled when `flag_platform_landing_zone` is true. Setting `resource_id` takes precedence over `deploy`.
 
@@ -2215,6 +2221,25 @@ object({
     subnet_keys             = optional(set(string), ["JumpboxSubnet"])
     zones                   = optional(set(string), ["1", "2", "3"])
     tags                    = optional(map(string))
+    resource_types = optional(object({
+      network_nat_gateways        = optional(string)
+      network_public_ip_addresses = optional(string)
+    }), {})
+    retry = optional(object({
+      error_message_regex  = list(string)
+      interval_seconds     = optional(number)
+      max_interval_seconds = optional(number)
+    }))
+    timeouts = optional(object({
+      create = optional(string)
+      delete = optional(string)
+      read   = optional(string)
+      update = optional(string)
+    }))
+    ignore_body_changes = optional(object({
+      network_nat_gateways        = optional(list(string), [])
+      network_public_ip_addresses = optional(list(string), [])
+    }), {})
   })
 ```
 
@@ -2288,9 +2313,9 @@ Default: `{}`
 
 Description: Configuration object for Private DNS Zones and their network links.
 
-- `azure_policy_pe_zone_linking_enabled` - (Optional) Whether Azure Policy is used to enable private endpoint dns zone linking when using a platform landing zone (platform landing zone flag = true). Default is true.
-- `existing_zones_resource_group_resource_id` - (Optional) Resource group resource id where existing Private DNS Zones are located.
-- `existing_zone_resource_ids` - (Optional) Map of granular existing Private DNS zone resource IDs keyed by the canonical zone keys exposed by this module. Entries override the resource-group-derived IDs.
+- `azure_policy_pe_zone_linking_enabled` - (Optional) Whether Azure Policy manages private endpoint DNS zone groups. When true, private endpoint consumers do not attach DNS zone groups. Default is true.
+- `existing_zones_resource_group_resource_id` - (Optional) Resource group resource ID containing the complete canonical set of existing Private DNS Zones. In standalone mode the module creates links from these zones to the managed or BYO virtual network. In platform landing-zone mode the platform owns those links.
+- `existing_zone_resource_ids` - (Optional) Granular existing Private DNS zone resource IDs keyed by canonical zone key. Entries override resource-group-derived IDs. In standalone mode the module links supplied zones to the managed or BYO virtual network; in platform landing-zone mode it does not create links.
 - `allow_internet_resolution_fallback` - (Optional) Whether to allow fallback to internet resolution for Private DNS Zone network links. Default is false.
 - `network_links` - (Optional) Map of network links to create for Private DNS Zones. The map key is deliberately arbitrary to avoid issues where map keys may be unknown at plan time.
   - `vnetlinkname` - The name of the virtual network link.
@@ -2600,9 +2625,9 @@ Version: 0.4.2
 
 ### <a name="module_nat_gateway"></a> [nat\_gateway](#module\_nat\_gateway)
 
-Source: Azure/avm-res-network-natgateway/azurerm
+Source: ./modules/nat_gateway
 
-Version: 0.2.1
+Version:
 
 ### <a name="module_nsgs"></a> [nsgs](#module\_nsgs)
 

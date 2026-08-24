@@ -47,25 +47,21 @@ module "byo_subnets" {
 }
 
 module "nat_gateway" {
-  source  = "Azure/avm-res-network-natgateway/azurerm"
-  version = "0.2.1"
-  count   = !var.flag_platform_landing_zone && var.nat_gateway_definition.deploy && var.nat_gateway_definition.resource_id == null ? 1 : 0
+  source = "./modules/nat_gateway"
+  count  = !var.flag_platform_landing_zone && var.nat_gateway_definition.deploy && var.nat_gateway_definition.resource_id == null ? 1 : 0
 
   location                = azurerm_resource_group.this.location
   name                    = local.nat_gateway_name
-  resource_group_name     = var.nat_gateway_definition.resource_group_name != null ? var.nat_gateway_definition.resource_group_name : azurerm_resource_group.this.name
-  enable_telemetry        = var.enable_telemetry
+  parent_id               = var.nat_gateway_definition.resource_group_name != null ? "/subscriptions/${data.azurerm_client_config.current.subscription_id}/resourceGroups/${var.nat_gateway_definition.resource_group_name}" : azurerm_resource_group.this.id
+  public_ip_name          = "${local.nat_gateway_name}-pip"
   idle_timeout_in_minutes = var.nat_gateway_definition.idle_timeout_in_minutes
-  public_ip_configuration = {
-    zones = var.nat_gateway_definition.zones
-  }
-  public_ips = {
-    primary = {
-      name = "${local.nat_gateway_name}-pip"
-    }
-  }
-  tags  = merge(local.tags, var.nat_gateway_definition.tags != null ? var.nat_gateway_definition.tags : {})
-  zones = var.nat_gateway_definition.zones
+  ignore_body_changes     = var.nat_gateway_definition.ignore_body_changes
+  resource_types          = var.nat_gateway_definition.resource_types
+  retry                   = var.nat_gateway_definition.retry
+  tags                    = merge(local.tags, var.nat_gateway_definition.tags != null ? var.nat_gateway_definition.tags : {})
+  telemetry_headers       = var.enable_telemetry ? { "User-Agent" = local.avm_azapi_header } : null
+  timeouts                = var.nat_gateway_definition.timeouts
+  zones                   = var.nat_gateway_definition.zones
 }
 
 module "nsgs" {
