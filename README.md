@@ -44,7 +44,9 @@ The optional `application_platform` input adds managed-identity Container App wo
 
 The default runtime mode remains `appConfig`, while `populate_app_configuration` defaults to `false`. The module's existing topology is network isolated, so consumers normally populate the exported `application_platform_runtime_configuration` map from a post-provision runner with private connectivity. No secret values are accepted by this interface.
 
-`containerEnv` injects non-secret bootstrap configuration directly into each workload. `none` injects only the workload identity client ID. Every workload gets a user-assigned managed identity; private-registry and optional Key Vault permissions are assigned before the Container App resource is created.
+`containerEnv` injects non-secret bootstrap configuration directly into each workload. `none` injects only the workload identity client ID. Every workload gets a user-assigned managed identity; private-registry and optional Key Vault permissions are assigned before the Container App resource is created. App Configuration writes and initial private ACR image pulls include bounded RBAC propagation waits rather than relying only on role-assignment creation ordering.
+
+Container Apps omit `workloadProfileName` by default, preserving Azure's existing Consumption-profile selection. Set `workload_profile_name` to an existing environment profile when targeting dedicated compute; dedicated-only environments require an explicit selection. Profile names must be 1 to 15 alphanumeric or hyphen characters, begin and end with an alphanumeric character, and match an entry in `container_app_environment_definition.workload_profile`.
 
 The `application_platform` output preserves the authorized handoff names inside one Terraform object. It records configured intent and resource handoffs only; it is not evidence of effective network isolation or cross-language scenario parity. Full CAF/legacy renaming of existing resources and Foundry IQ data-plane knowledge-base/source creation remain outside this additive change because either would require a separately reviewed migration or data-plane implementation.
 
@@ -93,6 +95,8 @@ The following resources are used by this module:
 - [random_string.name_suffix](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/string) (resource)
 - [random_uuid.telemetry](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/uuid) (resource)
 - [time_sleep.apim_ready](https://registry.terraform.io/providers/hashicorp/time/latest/docs/resources/sleep) (resource)
+- [time_sleep.application_platform_acr_pull_rbac](https://registry.terraform.io/providers/hashicorp/time/latest/docs/resources/sleep) (resource)
+- [time_sleep.application_platform_app_config_rbac](https://registry.terraform.io/providers/hashicorp/time/latest/docs/resources/sleep) (resource)
 - [time_sleep.purge_ai_foundry_cooldown](https://registry.terraform.io/providers/hashicorp/time/latest/docs/resources/sleep) (resource)
 - [time_sleep.wait_for_kv_rbac](https://registry.terraform.io/providers/hashicorp/time/latest/docs/resources/sleep) (resource)
 - [azapi_client_config.telemetry](https://registry.terraform.io/providers/Azure/azapi/latest/docs/data-sources/client_config) (data source)
@@ -1340,7 +1344,7 @@ Description: Additive Application Platform configuration aligned to the authoriz
 - `use_zone_redundancy` - Optional override for the existing Container Apps Environment and Container Registry zone-redundancy settings. Null preserves their current defaults.
 - `additional_app_configuration_settings` - Non-secret passthrough settings. Map keys are App Configuration keys.
 - `acr_task_agent_pool` - Optional private ACR Task agent pool configuration. Disabled by default.
-- `container_apps` - Optional workload map. Each workload receives a user-assigned managed identity. Private-registry workloads receive AcrPull before the app is created; appConfig workloads receive App Configuration Data Reader; Key Vault access is opt-in.
+- `container_apps` - Optional workload map. Each workload receives a user-assigned managed identity. `workload_profile_name` selects an existing Container Apps Environment workload profile; omitting it preserves Azure's Consumption-profile behavior. Dedicated-only environments must set it explicitly. Private-registry workloads receive AcrPull before the app is created; appConfig workloads receive App Configuration Data Reader; Key Vault access is opt-in.
 - `foundry_iq` - Runtime-only Foundry IQ handoff values. This change does not create Foundry IQ data-plane knowledge bases or sources.
 
 Type:
@@ -1379,6 +1383,7 @@ object({
       max_replicas                 = optional(number, 1)
       cpu                          = optional(number, 0.5)
       memory                       = optional(string, "1Gi")
+      workload_profile_name        = optional(string)
       env                          = optional(map(string), {})
       use_private_registry         = optional(bool, false)
       grant_key_vault_secrets_user = optional(bool, false)
@@ -2414,7 +2419,7 @@ Default: `{}`
 
 Description: Retry configuration applied to every Application Platform AzAPI resource declared by the module. Defaults to `null` (no custom retry).
 
-- `error_message_regex` - A list of regular expressions matching error messages that trigger a retry.
+- `error_message_regex` - A required, non-empty list of non-empty regular expressions matching error messages that trigger a retry.
 - `interval_seconds` - Initial interval between retries in seconds.
 - `max_interval_seconds` - Maximum interval between retries in seconds.
 

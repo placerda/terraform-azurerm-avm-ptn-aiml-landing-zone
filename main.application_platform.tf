@@ -69,6 +69,20 @@ resource "azapi_resource" "application_platform_acr_pull" {
   }
 }
 
+resource "time_sleep" "application_platform_acr_pull_rbac" {
+  for_each = {
+    for key, app in var.application_platform.container_apps : key => app
+    if app.use_private_registry && var.genai_container_registry_definition.deploy
+  }
+
+  create_duration = "60s"
+  triggers = {
+    role_assignment = azapi_resource.application_platform_acr_pull[each.key].id
+  }
+
+  depends_on = [azapi_resource.application_platform_acr_pull]
+}
+
 resource "azapi_resource" "application_platform_app_config_data_reader" {
   for_each = var.application_platform.app_runtime_configuration_mode == "appConfig" && var.genai_app_configuration_definition.deploy ? var.application_platform.container_apps : {}
 
@@ -141,6 +155,17 @@ resource "azapi_resource" "application_platform_app_config_data_owner" {
   }
 }
 
+resource "time_sleep" "application_platform_app_config_rbac" {
+  count = var.application_platform.populate_app_configuration && var.genai_app_configuration_definition.deploy ? 1 : 0
+
+  create_duration = "60s"
+  triggers = {
+    role_assignment = azapi_resource.application_platform_app_config_data_owner[0].id
+  }
+
+  depends_on = [azapi_resource.application_platform_app_config_data_owner]
+}
+
 resource "azapi_resource" "application_platform_key_vault_secrets_user" {
   for_each = {
     for key, app in var.application_platform.container_apps : key => app
@@ -192,7 +217,7 @@ resource "azapi_resource" "application_platform_container_app" {
   parent_id = azurerm_resource_group.this.id
   type      = var.resource_types.app_container_apps
   body = {
-    properties = {
+    properties = merge({
       managedEnvironmentId = module.container_apps_managed_environment[0].resource_id
       configuration = {
         activeRevisionsMode = "Single"
@@ -242,7 +267,9 @@ resource "azapi_resource" "application_platform_container_app" {
           maxReplicas = each.value.max_replicas
         }
       }
-    }
+      }, each.value.workload_profile_name == null ? {} : {
+      workloadProfileName = each.value.workload_profile_name
+    })
   }
   create_headers         = var.enable_telemetry ? { "User-Agent" = local.avm_azapi_header } : null
   delete_headers         = var.enable_telemetry ? { "User-Agent" = local.avm_azapi_header } : null
@@ -275,9 +302,9 @@ resource "azapi_resource" "application_platform_container_app" {
     }
   }
   depends_on = [
-    azapi_resource.application_platform_acr_pull,
     azapi_resource.application_platform_app_config_data_reader,
     azapi_resource.application_platform_key_vault_secrets_user,
+    time_sleep.application_platform_acr_pull_rbac,
   ]
 }
 
@@ -311,7 +338,7 @@ resource "azapi_resource" "application_platform_app_configuration_key_value" {
     }
   }
 
-  depends_on = [azapi_resource.application_platform_app_config_data_owner]
+  depends_on = [time_sleep.application_platform_app_config_rbac]
 }
 
 resource "azapi_resource" "application_platform_acr_task_agent_pool" {

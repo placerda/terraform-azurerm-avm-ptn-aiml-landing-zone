@@ -32,6 +32,7 @@ variable "application_platform" {
       max_replicas                 = optional(number, 1)
       cpu                          = optional(number, 0.5)
       memory                       = optional(string, "1Gi")
+      workload_profile_name        = optional(string)
       env                          = optional(map(string), {})
       use_private_registry         = optional(bool, false)
       grant_key_vault_secrets_user = optional(bool, false)
@@ -87,7 +88,7 @@ Additive Application Platform configuration aligned to the authorized Bicep pari
 - `use_zone_redundancy` - Optional override for the existing Container Apps Environment and Container Registry zone-redundancy settings. Null preserves their current defaults.
 - `additional_app_configuration_settings` - Non-secret passthrough settings. Map keys are App Configuration keys.
 - `acr_task_agent_pool` - Optional private ACR Task agent pool configuration. Disabled by default.
-- `container_apps` - Optional workload map. Each workload receives a user-assigned managed identity. Private-registry workloads receive AcrPull before the app is created; appConfig workloads receive App Configuration Data Reader; Key Vault access is opt-in.
+- `container_apps` - Optional workload map. Each workload receives a user-assigned managed identity. `workload_profile_name` selects an existing Container Apps Environment workload profile; omitting it preserves Azure's Consumption-profile behavior. Dedicated-only environments must set it explicitly. Private-registry workloads receive AcrPull before the app is created; appConfig workloads receive App Configuration Data Reader; Key Vault access is opt-in.
 - `foundry_iq` - Runtime-only Foundry IQ handoff values. This change does not create Foundry IQ data-plane knowledge bases or sources.
 DESCRIPTION
   nullable    = false
@@ -118,6 +119,16 @@ DESCRIPTION
       app.min_replicas >= 0 && app.max_replicas >= app.min_replicas && app.target_port >= 1 && app.target_port <= 65535
     ])
     error_message = "Each container app must use a target_port from 1 to 65535 and max_replicas must be greater than or equal to min_replicas."
+  }
+  validation {
+    condition = alltrue([
+      for app in values(var.application_platform.container_apps) :
+      app.workload_profile_name == null ? true : (
+        length(app.workload_profile_name) <= 15 &&
+        can(regex("^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$", app.workload_profile_name))
+      )
+    ])
+    error_message = "Each container app workload_profile_name must contain 1 to 15 alphanumeric or hyphen characters and begin and end with an alphanumeric character."
   }
   validation {
     condition     = contains(["ai_search", "foundry_iq"], var.application_platform.foundry_iq.retrieval_backend)
@@ -167,10 +178,21 @@ variable "retry" {
   description = <<DESCRIPTION
 Retry configuration applied to every Application Platform AzAPI resource declared by the module. Defaults to `null` (no custom retry).
 
-- `error_message_regex` - A list of regular expressions matching error messages that trigger a retry.
+- `error_message_regex` - A required, non-empty list of non-empty regular expressions matching error messages that trigger a retry.
 - `interval_seconds` - Initial interval between retries in seconds.
 - `max_interval_seconds` - Maximum interval between retries in seconds.
 DESCRIPTION
+
+  validation {
+    condition = var.retry == null ? true : (
+      try(length(var.retry.error_message_regex), 0) > 0 &&
+      alltrue([
+        for pattern in coalesce(var.retry.error_message_regex, []) :
+        length(trimspace(pattern)) > 0 && can(regexall(pattern, ""))
+      ])
+    )
+    error_message = "retry.error_message_regex must be present and contain at least one non-empty, valid regular expression when retry is non-null."
+  }
 }
 
 variable "timeouts" {

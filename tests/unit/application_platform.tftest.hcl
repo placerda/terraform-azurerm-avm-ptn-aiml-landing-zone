@@ -95,6 +95,102 @@ run "uses_configured_app_configuration_labels" {
     condition     = azapi_resource.application_platform_app_configuration_key_value["CUSTOM_SETTING"].name == "CUSTOM_SETTING$custom-label"
     error_message = "App Configuration key-value resource names must include the configured label."
   }
+
+  assert {
+    condition = (
+      length(time_sleep.application_platform_app_config_rbac) == 1 &&
+      time_sleep.application_platform_app_config_rbac[0].create_duration == "60s" &&
+      contains(keys(time_sleep.application_platform_app_config_rbac[0].triggers), "role_assignment")
+    )
+    error_message = "App Configuration key-value writes must have a bounded barrier triggered by the deployment principal's Data Owner assignment."
+  }
+}
+
+run "preserves_omitted_container_app_workload_profile" {
+  command = plan
+
+  variables {
+    application_platform = {
+      app_runtime_configuration_mode = "containerEnv"
+      container_apps = {
+        api = {
+          image = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = !contains(keys(azapi_resource.application_platform_container_app["api"].body.properties), "workloadProfileName")
+    error_message = "Omitting workload_profile_name must omit workloadProfileName from the Container App body."
+  }
+
+  assert {
+    condition     = output.application_platform_container_apps["api"].workload_profile_name == null
+    error_message = "The Container App output must preserve an omitted workload profile as null."
+  }
+
+  assert {
+    condition     = azapi_resource.application_platform_container_app["api"].retry == null
+    error_message = "Omitting retry must preserve the provider's default retry behavior."
+  }
+}
+
+run "targets_explicit_dedicated_workload_profile" {
+  command = plan
+
+  variables {
+    application_platform = {
+      app_runtime_configuration_mode = "containerEnv"
+      container_apps = {
+        api = {
+          image                 = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+          workload_profile_name = "dedicated-d4"
+        }
+      }
+    }
+    container_app_environment_definition = {
+      workload_profile = [{
+        name                  = "dedicated-d4"
+        workload_profile_type = "D4"
+      }]
+    }
+  }
+
+  assert {
+    condition     = azapi_resource.application_platform_container_app["api"].body.properties.workloadProfileName == "dedicated-d4"
+    error_message = "An explicit dedicated workload profile must be sent in the Container App body."
+  }
+
+  assert {
+    condition     = output.application_platform_container_apps["api"].workload_profile_name == "dedicated-d4"
+    error_message = "The Container App output must expose the selected dedicated workload profile."
+  }
+}
+
+run "waits_for_acr_pull_rbac_before_private_container_app" {
+  command = plan
+
+  variables {
+    application_platform = {
+      app_runtime_configuration_mode = "containerEnv"
+      container_apps = {
+        api = {
+          image                = "example.azurecr.io/api:latest"
+          use_private_registry = true
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      length(time_sleep.application_platform_acr_pull_rbac) == 1 &&
+      time_sleep.application_platform_acr_pull_rbac["api"].create_duration == "60s" &&
+      contains(keys(time_sleep.application_platform_acr_pull_rbac["api"].triggers), "role_assignment")
+    )
+    error_message = "Private-registry Container App creation must have a bounded barrier triggered by its AcrPull assignment."
+  }
 }
 
 run "rejects_workloads_without_container_environment" {
@@ -141,4 +237,61 @@ run "rejects_invalid_agent_pool" {
   }
 
   expect_failures = [var.application_platform]
+}
+
+run "rejects_empty_retry_error_patterns" {
+  command = plan
+
+  variables {
+    retry = {
+      error_message_regex = []
+    }
+  }
+
+  expect_failures = [var.retry]
+}
+
+run "rejects_missing_retry_error_patterns" {
+  command = plan
+
+  variables {
+    retry = {}
+  }
+
+  expect_failures = [var.retry]
+}
+
+run "rejects_invalid_workload_profile_name" {
+  command = plan
+
+  variables {
+    application_platform = {
+      container_apps = {
+        api = {
+          image                 = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+          workload_profile_name = "invalid profile"
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.application_platform]
+}
+
+run "rejects_unknown_workload_profile_name" {
+  command = plan
+
+  variables {
+    application_platform = {
+      app_runtime_configuration_mode = "containerEnv"
+      container_apps = {
+        api = {
+          image                 = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+          workload_profile_name = "dedicated-d4"
+        }
+      }
+    }
+  }
+
+  expect_failures = [output.application_platform]
 }

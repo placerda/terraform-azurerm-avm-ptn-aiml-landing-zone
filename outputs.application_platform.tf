@@ -25,6 +25,16 @@ output "application_platform" {
     condition     = !var.application_platform.acr_task_agent_pool.enabled || (var.genai_container_registry_definition.deploy && var.genai_container_registry_definition.sku == "Premium")
     error_message = "The private ACR Task agent pool requires a deployed Premium Container Registry."
   }
+  precondition {
+    condition = alltrue([
+      for app in values(var.application_platform.container_apps) :
+      app.workload_profile_name == null || contains(
+        [for profile in var.container_app_environment_definition.workload_profile : profile.name],
+        app.workload_profile_name
+      )
+    ])
+    error_message = "Each application_platform.container_apps workload_profile_name must match a profile in container_app_environment_definition.workload_profile."
+  }
   value = {
     APP_CONFIG_ENDPOINT                  = local.application_platform_app_config_endpoint
     APP_RUNTIME_CONFIGURATION_MODE       = var.application_platform.app_runtime_configuration_mode
@@ -63,6 +73,7 @@ output "application_platform_container_apps" {
       resource_id                   = app.id
       name                          = app.name
       fqdn                          = try(app.output.properties.configuration.ingress.fqdn, null)
+      workload_profile_name         = var.application_platform.container_apps[key].workload_profile_name
       managed_identity_resource_id  = azapi_resource.application_platform_container_app_identity[key].id
       managed_identity_principal_id = azapi_resource.application_platform_container_app_identity[key].output.properties.principalId
     }
