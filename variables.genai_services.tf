@@ -241,54 +241,7 @@ variable "genai_cosmosdb_definition" {
           })), [])
         }), null)
       })), {})
-      })), {
-      application = {
-        name = "cosmosdb"
-        containers = {
-          conversations = {
-            name                = "conversations"
-            partition_key_paths = ["/principal_id"]
-            default_ttl         = -1
-            indexing_policy = {
-              indexing_mode = "consistent"
-              included_paths = [{
-                path = "/*"
-              }]
-              composite_indexes = [
-                {
-                  indexes = [
-                    {
-                      path  = "/isDeleted"
-                      order = "Ascending"
-                    },
-                    {
-                      path  = "/_ts"
-                      order = "Descending"
-                    }
-                  ]
-                },
-                {
-                  indexes = [
-                    {
-                      path  = "/isDeleted"
-                      order = "Ascending"
-                    },
-                    {
-                      path  = "/name"
-                      order = "Ascending"
-                    },
-                    {
-                      path  = "/_ts"
-                      order = "Descending"
-                    }
-                  ]
-                }
-              ]
-            }
-          }
-        }
-      }
-    })
+    })), {})
     tags = optional(map(string))
   })
   default     = {}
@@ -341,7 +294,7 @@ Configuration object for the Azure Cosmos DB account to be created for GenAI ser
   - `allowed_origins` - Set of allowed origins.
   - `exposed_headers` - Set of exposed headers.
   - `max_age_in_seconds` - (Optional) Maximum age in seconds for CORS.
-- `sql_databases` - (Optional) SQL databases and containers to create. The default creates the `cosmosdb` database and the `conversations` container with partition key `/principal_id`, infinite TTL, and the source landing zone's composite indexes.
+- `sql_databases` - (Optional) SQL databases and containers to create. Default is empty so an upgrade never creates or collides with child resources implicitly.
   - `name` - Database name.
   - `throughput` - (Optional) Manual database throughput.
   - `autoscale_settings.max_throughput` - (Optional) Maximum autoscale throughput.
@@ -498,12 +451,7 @@ variable "genai_storage_account_definition" {
         read   = optional(string)
         update = optional(string)
       }))
-      })), {
-      documents = {
-        name          = "documents"
-        public_access = "None"
-      }
-    })
+    })), {})
     tags = optional(map(string))
   })
   default     = {}
@@ -531,7 +479,7 @@ Configuration object for the Azure Storage Account to be created for GenAI servi
 - `access_tier` - (Optional) The access tier for the storage account. Default is "Hot".
 - `public_network_access_enabled` - (Optional) Whether public network access is enabled. Default is false.
 - `shared_access_key_enabled` - (Optional) Whether shared access keys are enabled. Default is true.
-- `containers` - (Optional) Blob containers to create. The default creates a private `documents` container.
+- `containers` - (Optional) Blob containers to create. Default is empty so an upgrade never creates or collides with child resources implicitly.
   - `name` - Container name.
   - `public_access` - (Optional) Public access level. Default is "None".
   - `metadata` - (Optional) Container metadata.

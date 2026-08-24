@@ -43,22 +43,61 @@ variables {
   vnet_definition            = {}
 }
 
-run "data_services_defaults" {
+run "data_services_defaults_are_upgrade_safe" {
   command = plan
 
   assert {
-    condition     = output.data_ai_services.cosmos_sql_databases.application.name == "cosmosdb"
-    error_message = "The default Cosmos DB SQL database contract must be present."
+    condition     = output.data_ai_services.cosmos_sql_databases == {}
+    error_message = "Cosmos DB SQL databases must default to empty so upgrades do not create child resources."
   }
 
   assert {
-    condition     = length(output.data_ai_services.cosmos_sql_databases.application.containers.conversations.partition_key_paths) == 1 && output.data_ai_services.cosmos_sql_databases.application.containers.conversations.partition_key_paths[0] == "/principal_id"
-    error_message = "The conversations container must retain the /principal_id partition key."
+    condition     = output.data_ai_services.storage_containers == {}
+    error_message = "Storage containers must default to empty so upgrades do not create child resources."
+  }
+}
+
+run "data_services_children_are_explicitly_opted_in" {
+  command = plan
+
+  variables {
+    genai_cosmosdb_definition = {
+      sql_databases = {
+        application = {
+          name = "cosmosdb"
+          containers = {
+            conversations = {
+              name                = "conversations"
+              partition_key_paths = ["/principal_id"]
+              default_ttl         = -1
+            }
+          }
+        }
+      }
+    }
+    genai_storage_account_definition = {
+      containers = {
+        documents = {
+          name          = "documents"
+          public_access = "None"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = output.data_ai_services.cosmos_sql_databases.application.name == "cosmosdb"
+    error_message = "The explicit Cosmos DB parity preset must create the application database."
+  }
+
+  assert {
+    condition     = output.data_ai_services.cosmos_sql_databases.application.containers.conversations.partition_key_paths == tolist(["/principal_id"])
+    error_message = "The explicit conversations container must retain the /principal_id partition key."
   }
 
   assert {
     condition     = output.data_ai_services.storage_containers.documents == "documents"
-    error_message = "The default private documents container must be present."
+    error_message = "The explicit private documents container must be present."
   }
 }
 
@@ -72,6 +111,13 @@ run "application_insights_and_speech_opt_in" {
     ks_speech_service_definition = {
       deploy = true
     }
+    law_definition = {
+      deploy      = false
+      resource_id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/central-observability/providers/Microsoft.OperationalInsights/workspaces/workspace-a"
+    }
+    private_dns_zones = {
+      azure_policy_pe_zone_linking_enabled = false
+    }
   }
 
   assert {
@@ -82,6 +128,109 @@ run "application_insights_and_speech_opt_in" {
   assert {
     condition     = output.data_ai_services.speech_service_location == "eastus"
     error_message = "Speech must inherit the landing-zone location by default."
+  }
+
+  assert {
+    condition = (
+      azapi_resource.application_insights[0].body.properties.WorkspaceResourceId == "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/central-observability/providers/Microsoft.OperationalInsights/workspaces/workspace-a" &&
+      azapi_resource.application_insights[0].body.properties.DisableLocalAuth &&
+      azapi_resource_action.application_insights_daily_cap[0].body.DataVolumeCap.Cap == 100
+    )
+    error_message = "Application Insights must remain workspace-associated, local-auth disabled, and daily-cap managed."
+  }
+
+  assert {
+    condition = (
+      azapi_resource.speech_service[0].body.properties.publicNetworkAccess == "Disabled" &&
+      azapi_resource.speech_service[0].body.properties.networkAcls.defaultAction == "Deny" &&
+      azapi_resource.speech_service[0].body.properties.disableLocalAuth &&
+      azapi_resource.speech_service[0].identity[0].type == "SystemAssigned"
+    )
+    error_message = "Network-isolated Speech must disable public/local access, deny by default, and use a system identity."
+  }
+
+  assert {
+    condition = (
+      length(azapi_resource.speech_private_endpoint) == 1 &&
+      azapi_resource.speech_private_endpoint[0].body.properties.privateLinkServiceConnections[0].properties.groupIds == ["account"] &&
+      length(azapi_resource.speech_private_dns_zone_group) == 1 &&
+      azapi_resource.speech_private_dns_zone_group[0].body.properties.privateDnsZoneConfigs[0].name == "cognitive-services"
+    )
+    error_message = "Network-isolated Speech must create the account private endpoint and Cognitive Services DNS zone group."
+  }
+
+  assert {
+    condition     = length(azapi_resource.speech_diagnostic_setting) == 1 && values(azapi_resource.speech_diagnostic_setting)[0].body.properties.workspaceId == "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/central-observability/providers/Microsoft.OperationalInsights/workspaces/workspace-a"
+    error_message = "Speech diagnostics must target the effective Log Analytics workspace."
+  }
+
+  assert {
+    condition     = length(azapi_resource.speech_role_assignment) == 0
+    error_message = "Deployment-principal Speech RBAC must remain opt-in."
+  }
+}
+
+run "speech_standard_access_has_no_private_endpoint" {
+  command = plan
+
+  variables {
+    ks_speech_service_definition = {
+      deploy                           = true
+      enable_diagnostic_settings       = false
+      public_network_access_enabled    = true
+      assign_deployment_principal_rbac = false
+    }
+  }
+
+  assert {
+    condition = (
+      azapi_resource.speech_service[0].body.properties.publicNetworkAccess == "Enabled" &&
+      azapi_resource.speech_service[0].body.properties.networkAcls.defaultAction == "Allow" &&
+      length(azapi_resource.speech_private_endpoint) == 0 &&
+      length(azapi_resource.speech_private_dns_zone_group) == 0
+    )
+    error_message = "Standard Speech must enable public access and omit private endpoint/DNS resources."
+  }
+}
+
+run "speech_deployment_principal_rbac_is_explicit" {
+  command = plan
+
+  variables {
+    ks_speech_service_definition = {
+      deploy                           = true
+      enable_diagnostic_settings       = false
+      public_network_access_enabled    = true
+      assign_deployment_principal_rbac = true
+    }
+  }
+
+  assert {
+    condition = toset([for assignment in values(azapi_resource.speech_role_assignment) : assignment.body.properties.roleDefinitionId]) == toset([
+      "/subscriptions/00000000-0000-0000-0000-000000000003/providers/Microsoft.Authorization/roleDefinitions/25fbc0a9-bd7c-42a3-aa1a-3b75d497ee68",
+      "/subscriptions/00000000-0000-0000-0000-000000000003/providers/Microsoft.Authorization/roleDefinitions/a97b65f3-24c7-4388-baec-2e87135dc908",
+    ])
+    error_message = "Explicit deployment-principal RBAC must assign only Cognitive Services Contributor and User."
+  }
+}
+
+run "application_insights_diagnostics_are_explicit" {
+  command = plan
+
+  variables {
+    app_insights_definition = {
+      deploy                     = true
+      enable_diagnostic_settings = true
+    }
+    law_definition = {
+      deploy      = false
+      resource_id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/central-observability/providers/Microsoft.OperationalInsights/workspaces/workspace-a"
+    }
+  }
+
+  assert {
+    condition     = length(azapi_resource.application_insights_diagnostic_setting) == 1 && values(azapi_resource.application_insights_diagnostic_setting)[0].body.properties.workspaceId == "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/central-observability/providers/Microsoft.OperationalInsights/workspaces/workspace-a"
+    error_message = "Application Insights diagnostics must target the effective Log Analytics workspace when enabled."
   }
 }
 

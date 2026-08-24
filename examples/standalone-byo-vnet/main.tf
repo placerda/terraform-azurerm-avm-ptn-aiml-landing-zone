@@ -302,9 +302,10 @@ module "test" {
     enable_diagnostic_settings = false
   }
   ks_speech_service_definition = {
-    deploy                     = true
-    enable_diagnostic_settings = false
-    sku                        = "S0"
+    deploy                           = true
+    assign_deployment_principal_rbac = false
+    enable_diagnostic_settings       = false
+    sku                              = "S0"
   }
   tags = {
     SecurityControl = "Ignore"

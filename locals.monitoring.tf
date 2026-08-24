@@ -10,7 +10,15 @@ locals {
       workspace_resource_id = local.log_analytics_workspace_id
     }
   })
-  app_insights_location    = lower(var.location) == "westcentralus" ? "eastus" : var.location
-  app_insights_name        = try(var.app_insights_definition.name, null) != null ? var.app_insights_definition.name : (var.name_prefix != null ? "${var.name_prefix}-app-insights" : "ai-alz-app-insights-${random_string.name_suffix.result}")
-  app_insights_resource_id = var.app_insights_definition.resource_id != null ? var.app_insights_definition.resource_id : (length(module.application_insights) > 0 ? module.application_insights[0].resource_id : null)
+  app_insights_location               = lower(var.location) == "westcentralus" ? "eastus" : var.location
+  app_insights_name                   = try(var.app_insights_definition.name, null) != null ? var.app_insights_definition.name : (var.name_prefix != null ? "${var.name_prefix}-app-insights" : "ai-alz-app-insights-${random_string.name_suffix.result}")
+  app_insights_resource_id            = var.app_insights_definition.resource_id != null ? var.app_insights_definition.resource_id : try(azapi_resource.application_insights[0].id, null)
+  app_insights_named_role_assignments = { for key, assignment in var.app_insights_definition.role_assignments : key => assignment if !startswith(assignment.role_definition_id_or_name, "/") && !can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", assignment.role_definition_id_or_name)) }
+  app_insights_resolved_role_assignments = { for key, assignment in var.app_insights_definition.role_assignments : key => merge(assignment, {
+    role_definition_id = startswith(assignment.role_definition_id_or_name, "/") ? assignment.role_definition_id_or_name : (
+      can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", assignment.role_definition_id_or_name)) ?
+      "/subscriptions/${data.azurerm_client_config.current.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${assignment.role_definition_id_or_name}" :
+      data.azapi_resource_list.app_insights_role_definition[key].output.role_definition_id
+    )
+  }) }
 }

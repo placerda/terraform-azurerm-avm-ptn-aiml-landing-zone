@@ -52,11 +52,11 @@ The baseline Terraform files for these capability groups are unchanged between v
 
 ### Additive service contract
 
-- Standalone GenAI Cosmos DB now composes a `cosmosdb` SQL database with a `conversations` container, `/principal_id` partition key, infinite default TTL, and the two source composite indexes.
-- Standalone GenAI Storage now composes a private `documents` blob container. Its existing defaults remain GRS replication with shared access keys enabled.
+- Standalone GenAI Cosmos DB can explicitly compose a `cosmosdb` SQL database with a `conversations` container, `/principal_id` partition key, infinite default TTL, and the two source composite indexes. `sql_databases` defaults to empty.
+- Standalone GenAI Storage can explicitly compose a private `documents` blob container. `containers` defaults to empty; the account's existing defaults remain GRS replication with shared access keys enabled.
 - Foundry BYOR Storage remains distinct: ZRS replication with shared access keys disabled by default.
 - Application Insights can be created or referenced by resource ID. Existing-component reuse requires an explicitly reused Log Analytics workspace unless `allow_mixed_workspaces` records an intentional exception.
-- Azure AI Speech is opt-in and defaults to `S0`, system-assigned managed identity, disabled local authentication, disabled public network access, a private endpoint using `privatelink.cognitiveservices.azure.com`, and deployment-principal `Cognitive Services Contributor` plus `Cognitive Services User` roles.
+- Azure AI Speech is opt-in and defaults to `S0`, system-assigned managed identity, disabled local authentication, disabled public network access, and a private endpoint using `privatelink.cognitiveservices.azure.com`. Deployment-principal RBAC is separately opt-in and defaults to disabled.
 - Root outputs contain only non-secret IDs, names, endpoints, regions, managed identity principal IDs, and data-container names. Connection strings, instrumentation keys, and access keys are never exposed.
 
 ### Scenario status
@@ -72,6 +72,14 @@ The baseline Terraform files for these capability groups are unchanged between v
 - AMPLS, its `azuremonitor` private endpoint, scoped-resource links, and the Azure Monitor/OMS/ODS/Automation private DNS zone set are deferred as one coherent networking change. Application Insights keeps internet ingestion/query enabled by default until that dependency is implemented.
 - Secure runtime propagation of an existing Application Insights connection string is deferred. The module intentionally accepts and outputs only the component resource ID.
 - Cosmos DB SQL data-plane role assignments are deferred pending an AzAPI/AVM implementation decision; ARM role assignments are not a substitute.
-- Default Search, Storage, Key Vault, and workload-identity data-plane role changes are deferred because silently changing existing defaults would violate the migration-free handoff. Speech executor roles are safe because Speech is a new opt-in resource.
+- Default Search, Storage, Key Vault, and workload-identity data-plane role changes are deferred because silently changing existing defaults would violate the migration-free handoff. Creating the Speech account, managed identity, private endpoint, and diagnostics requires control-plane deployment permission but does not require persistent Cognitive Services data-plane roles. Set `assign_deployment_principal_rbac = true` only when that principal must perform post-deployment Cognitive Services operations; this grants exactly Cognitive Services Contributor and Cognitive Services User at the Speech account scope.
 - Bing-to-Foundry connection wiring remains dependent on the separately scoped Foundry connection capability groups.
 - Approved Azure deployment evidence, DNS resolution, endpoint reachability, RBAC behavior, and isolation comparison remain required before any parity claim.
+
+### Upgrade and release guidance
+
+- The proposed Data & AI capability set is additive and is expected to ship in a pre-1.0 minor release (for example, `0.6.0`), not a patch release.
+- `genai_cosmosdb_definition.sql_databases` and `genai_storage_account_definition.containers` deliberately default to `{}`. Existing consumers can upgrade without Terraform silently creating or colliding with databases, Cosmos containers, or blob containers.
+- Consumers that want the Bicep parity preset must copy the explicit `cosmosdb`/`conversations` and `documents` definitions from [`examples/standalone-byo-vnet`](./examples/standalone-byo-vnet). If equivalent child resources already exist, import them into the child-module addresses before enabling the preset.
+- `ks_speech_service_definition.assign_deployment_principal_rbac` defaults to `false`. Consumers that intentionally depended on the earlier proposal default must opt in explicitly and review the two persistent account-scoped assignments.
+- Non-empty `ignore_body_changes` values use the AzAPI write-only lifecycle interface and therefore require Terraform 1.11 or later; the default empty value remains compatible with the module's Terraform 1.9 minimum.

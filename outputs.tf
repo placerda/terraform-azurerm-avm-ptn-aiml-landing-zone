@@ -15,11 +15,11 @@ output "data_ai_services" {
     log_analytics_workspace_id  = local.log_analytics_workspace_id
     search_service_resource_id  = try(module.search_service[0].resource_id, null)
     bing_grounding_resource_id  = try(azapi_resource.bing_grounding[0].id, null)
-    speech_service_resource_id  = try(module.speech_service[0].resource_id, null)
-    speech_service_name         = try(module.speech_service[0].name, null)
+    speech_service_resource_id  = try(azapi_resource.speech_service[0].id, null)
+    speech_service_name         = var.ks_speech_service_definition.deploy ? local.ks_speech_service_name : null
     speech_service_location     = var.ks_speech_service_definition.deploy ? local.ks_speech_service_location : null
-    speech_service_endpoint     = try(module.speech_service[0].endpoint, null)
-    speech_service_principal_id = try(module.speech_service[0].system_assigned_mi_principal_id, null)
+    speech_service_endpoint     = try(azapi_resource.speech_service[0].output.properties.endpoint, null)
+    speech_service_principal_id = try(azapi_resource.speech_service[0].output.identity.principalId, null)
   }
 }
 

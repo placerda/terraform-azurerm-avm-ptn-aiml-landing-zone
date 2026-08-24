@@ -105,7 +105,7 @@ variable "ks_speech_service_definition" {
     sku                              = optional(string, "S0")
     public_network_access_enabled    = optional(bool, false)
     local_authentication_enabled     = optional(bool, false)
-    assign_deployment_principal_rbac = optional(bool, true)
+    assign_deployment_principal_rbac = optional(bool, false)
     enable_diagnostic_settings       = optional(bool, true)
     diagnostic_settings = optional(map(object({
       name                                     = optional(string, null)
@@ -141,7 +141,7 @@ Configuration for an optional Azure AI Speech account.
 - `sku` - (Optional) Speech SKU. The network-isolated configuration requires "S0", which is the default.
 - `public_network_access_enabled` - (Optional) Enable public network access. Default is false.
 - `local_authentication_enabled` - (Optional) Enable key-based local authentication. Default is false.
-- `assign_deployment_principal_rbac` - (Optional) Assign Cognitive Services Contributor and Cognitive Services User to the deployment principal. Default is true.
+- `assign_deployment_principal_rbac` - (Optional) Assign Cognitive Services Contributor and Cognitive Services User to the deployment principal. Default is false. Account creation and managed-identity authentication do not require these persistent data-plane roles; enable only when the deployment principal must perform post-deployment Cognitive Services operations.
 - `enable_diagnostic_settings` - (Optional) Enable automatic diagnostics to the effective Log Analytics workspace. Default is true.
 - `diagnostic_settings` - (Optional) Explicit diagnostic settings, which take precedence over the automatic setting.
 - `role_assignments` - (Optional) Additional account-scoped role assignments for workload identities.
