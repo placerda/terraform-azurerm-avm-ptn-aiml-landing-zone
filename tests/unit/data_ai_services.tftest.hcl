@@ -229,8 +229,77 @@ run "application_insights_diagnostics_are_explicit" {
   }
 
   assert {
-    condition     = length(azapi_resource.application_insights_diagnostic_setting) == 1 && values(azapi_resource.application_insights_diagnostic_setting)[0].body.properties.workspaceId == "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/central-observability/providers/Microsoft.OperationalInsights/workspaces/workspace-a"
-    error_message = "Application Insights diagnostics must target the effective Log Analytics workspace when enabled."
+    condition = (
+      length(azapi_resource.application_insights_diagnostic_setting) == 1 &&
+      values(azapi_resource.application_insights_diagnostic_setting)[0].body.properties.workspaceId == "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/central-observability/providers/Microsoft.OperationalInsights/workspaces/workspace-a" &&
+      values(azapi_resource.application_insights_diagnostic_setting)[0].body.properties.logs == [{
+        categoryGroup = "allLogs"
+        enabled       = true
+        retentionPolicy = {
+          days    = 0
+          enabled = false
+        }
+      }] &&
+      values(azapi_resource.application_insights_diagnostic_setting)[0].body.properties.metrics == [{
+        category = "AllMetrics"
+        enabled  = true
+        retentionPolicy = {
+          days    = 0
+          enabled = false
+        }
+      }]
+    )
+    error_message = "Automatic Application Insights diagnostics must target the effective workspace and collect allLogs and AllMetrics."
+  }
+}
+
+run "application_insights_explicit_diagnostics_are_preserved" {
+  command = plan
+
+  variables {
+    app_insights_definition = {
+      deploy                     = true
+      enable_diagnostic_settings = true
+      diagnostic_settings = {
+        requests_only = {
+          workspace_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/central-observability/providers/Microsoft.OperationalInsights/workspaces/workspace-a"
+          logs = [{
+            category = "AppRequests"
+          }]
+          metrics = [{
+            category = "AllMetrics"
+            enabled  = false
+          }]
+        }
+      }
+    }
+    law_definition = {
+      deploy      = false
+      resource_id = "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/central-observability/providers/Microsoft.OperationalInsights/workspaces/workspace-a"
+    }
+  }
+
+  assert {
+    condition = (
+      length(azapi_resource.application_insights_diagnostic_setting) == 1 &&
+      values(azapi_resource.application_insights_diagnostic_setting)[0].body.properties.logs == [{
+        category = "AppRequests"
+        enabled  = true
+        retentionPolicy = {
+          days    = 0
+          enabled = false
+        }
+      }] &&
+      values(azapi_resource.application_insights_diagnostic_setting)[0].body.properties.metrics == [{
+        category = "AllMetrics"
+        enabled  = false
+        retentionPolicy = {
+          days    = 0
+          enabled = false
+        }
+      }]
+    )
+    error_message = "Explicit Application Insights diagnostic categories and enabled states must remain unchanged."
   }
 }
 

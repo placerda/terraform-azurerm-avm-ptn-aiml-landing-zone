@@ -66,7 +66,7 @@ Configuration for a workspace-based Application Insights component or an existin
 - `retention_in_days` - (Optional) Retention period. Default is 90.
 - `allow_mixed_workspaces` - (Optional) Allow reuse of Application Insights without an explicitly reused Log Analytics workspace. Default is false.
 - `enable_diagnostic_settings` - (Optional) Enable component diagnostic settings. Default is false.
-- `diagnostic_settings` - (Optional) Component diagnostic settings.
+- `diagnostic_settings` - (Optional) Component diagnostic settings. When diagnostics are enabled and this map is empty, the automatic setting collects the `allLogs` category group and `AllMetrics`. Supplied settings are preserved without adding categories.
 - `role_assignments` - (Optional) Component-scoped role assignments.
 - `tags` - (Optional) Component tags.
 DESCRIPTION
