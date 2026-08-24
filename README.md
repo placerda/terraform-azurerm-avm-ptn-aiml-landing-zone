@@ -42,9 +42,11 @@ These settings are used across the examples to help deployments succeed in polic
 
 The module exposes account, project, model deployment, and Bring Your Own Resource IDs through `ai_foundry_account`, `ai_foundry_projects`, `ai_foundry_model_deployment_ids`, and `ai_foundry_byor_resource_ids`. Existing `ai_foundry_definition` defaults remain unchanged: local authentication is not disabled by default and AI Agent Service creation remains opt-in.
 
-`hosted_agent_definition` adds an opt-in infrastructure handoff for downstream `azure.ai.agent` deployment. The module validates immutable image digests, selects a configured Foundry project, prepares `AcrPull` for the project managed identity when using the module-managed registry, and returns network and private-build inputs. The landing zone does not create the downstream data-plane agent identity or agent version.
+`hosted_agent_definition` adds an opt-in infrastructure handoff for downstream `azure.ai.agent` deployment. The module validates immutable image digests, selects a configured Foundry project, grants the deployment principal Azure AI Project Manager at the project scope, and grants the project managed identity registry pull access. Module-managed registries and existing registries in `rbac` mode use AcrPull; existing registries in `rbac-abac` mode use Container Registry Repository Reader. Registry IDs, endpoints, and downstream agent strings are trimmed before they are used or returned.
 
-This handoff currently supports only the standalone network-isolated topology. Public standalone Foundry, hub-spoke, Bing connections, automatic Cosmos DB data-plane role assignments, existing-registry role creation, and ACR Task agent-pool deployment are not implemented. Consumers remain responsible for private endpoint, DNS, and VNet-internal build connectivity when supplying an existing registry.
+This handoff currently supports only the standalone network-isolated topology. Public standalone Foundry, hub-spoke, Bing connections, automatic Cosmos DB data-plane role assignments, and ACR Task agent-pool deployment are not implemented. Consumers remain responsible for private endpoint, DNS, and VNet-internal build connectivity when supplying an existing registry. The landing zone does not create the downstream data-plane agent identity or agent version.
+
+For an existing registry, provide its ARM resource ID and login hostname. Set `role_assignment_mode = "rbac-abac"` only when the registry uses RBAC Registry + ABAC Repository Permissions; otherwise retain the `rbac` default.
 
 <!-- markdownlint-disable MD033 -->
 ## Requirements
@@ -53,7 +55,7 @@ The following requirements are needed by this module:
 
 - <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (>= 1.9, < 2.0)
 
-- <a name="requirement_azapi"></a> [azapi](#requirement\_azapi) (~> 2.4)
+- <a name="requirement_azapi"></a> [azapi](#requirement\_azapi) (~> 2.12)
 
 - <a name="requirement_azurerm"></a> [azurerm](#requirement\_azurerm) (~> 4.0)
 
@@ -73,6 +75,8 @@ The following resources are used by this module:
 - [azapi_resource.apim_api_policy_ai_foundry](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
 - [azapi_resource.apim_backend_ai_foundry](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
 - [azapi_resource.bing_grounding](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
+- [azapi_resource.hosted_agent_project_manager](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
+- [azapi_resource.hosted_agent_registry_pull](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource) (resource)
 - [azapi_resource_action.purge_ai_foundry](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource_action) (resource)
 - [azurerm_network_security_rule.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/network_security_rule) (resource)
 - [azurerm_resource_group.this](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/resource_group) (resource)
@@ -2031,7 +2035,7 @@ Description: Configuration for the Microsoft Foundry hosted-agent deployment han
 - `container_registry` - (Optional) Existing registry contract used when `genai_container_registry_definition.deploy` is false.
   - `existing_resource_id` - Resource ID of an existing Azure Container Registry.
   - `existing_endpoint` - Login endpoint of the existing registry, for example `contoso.azurecr.io`.
-  - `role_assignment_mode` - Registry permissions mode. Allowed values are `rbac` and `rbac-abac`. Default is `rbac`.
+  - `role_assignment_mode` - Registry permissions mode. `rbac` grants AcrPull; `rbac-abac` grants Container Registry Repository Reader. Default is `rbac`.
 
 The supported hosted-agent scenario is standalone with network isolation. Hub-spoke and public standalone Foundry topologies are intentionally excluded. The selected Foundry account must enable AI Agent Service, and the selected project must enable project connections.
 
@@ -2064,6 +2068,32 @@ object({
       existing_endpoint    = optional(string)
       role_assignment_mode = optional(string, "rbac")
     }), {})
+  })
+```
+
+Default: `{}`
+
+### <a name="input_ignore_body_changes"></a> [ignore\_body\_changes](#input\_ignore\_body\_changes)
+
+Description: Body-relative paths to ignore for each AzAPI resource. Paths use dot notation. Changes take effect only after apply, and ignored configuration is not sent to Azure until the path is removed.
+
+- `apimanagement_service_apis` - Paths ignored on API Management API resources.
+- `apimanagement_service_apis_operations` - Paths ignored on API Management API operation resources.
+- `apimanagement_service_apis_policies` - Paths ignored on API Management API policy resources.
+- `apimanagement_service_backends` - Paths ignored on API Management backend resources.
+- `authorization_role_assignments` - Paths ignored on hosted-agent role assignment resources.
+- `bing_accounts` - Paths ignored on Bing account resources.
+
+Type:
+
+```hcl
+object({
+    apimanagement_service_apis            = optional(list(string), [])
+    apimanagement_service_apis_operations = optional(list(string), [])
+    apimanagement_service_apis_policies   = optional(list(string), [])
+    apimanagement_service_backends        = optional(list(string), [])
+    authorization_role_assignments        = optional(list(string), [])
+    bing_accounts                         = optional(list(string), [])
   })
 ```
 
@@ -2323,6 +2353,54 @@ object({
 
 Default: `{}`
 
+### <a name="input_resource_types"></a> [resource\_types](#input\_resource\_types)
+
+Description: AzAPI resource types and API versions used by the module.
+
+- `apimanagement_service_apis` - Resource type and API version for API Management APIs.
+- `apimanagement_service_apis_operations` - Resource type and API version for API Management API operations.
+- `apimanagement_service_apis_policies` - Resource type and API version for API Management API policies.
+- `apimanagement_service_backends` - Resource type and API version for API Management backends.
+- `authorization_role_assignments` - Resource type and API version for role assignments.
+- `bing_accounts` - Resource type and API version for Bing accounts.
+- `cognitiveservices_locations_resource_groups_deleted_accounts` - Resource type and API version for Foundry purge actions.
+
+Type:
+
+```hcl
+object({
+    apimanagement_service_apis                                   = optional(string, "Microsoft.ApiManagement/service/apis@2024-05-01")
+    apimanagement_service_apis_operations                        = optional(string, "Microsoft.ApiManagement/service/apis/operations@2024-05-01")
+    apimanagement_service_apis_policies                          = optional(string, "Microsoft.ApiManagement/service/apis/policies@2024-05-01")
+    apimanagement_service_backends                               = optional(string, "Microsoft.ApiManagement/service/backends@2024-05-01")
+    authorization_role_assignments                               = optional(string, "Microsoft.Authorization/roleAssignments@2022-04-01")
+    bing_accounts                                                = optional(string, "Microsoft.Bing/accounts@2025-05-01-preview")
+    cognitiveservices_locations_resource_groups_deleted_accounts = optional(string, "Microsoft.CognitiveServices/locations/resourceGroups/deletedAccounts@2021-04-30")
+  })
+```
+
+Default: `{}`
+
+### <a name="input_retry"></a> [retry](#input\_retry)
+
+Description: Retry configuration applied to every supported AzAPI resource declared by the module. Defaults to `null` (no custom retry).
+
+- `error_message_regex` - (Optional) Regex patterns matching errors that trigger a retry.
+- `interval_seconds` - (Optional) Initial interval between retries in seconds.
+- `max_interval_seconds` - (Optional) Maximum interval between retries in seconds.
+
+Type:
+
+```hcl
+object({
+    error_message_regex  = optional(list(string))
+    interval_seconds     = optional(number)
+    max_interval_seconds = optional(number)
+  })
+```
+
+Default: `null`
+
 ### <a name="input_tags"></a> [tags](#input\_tags)
 
 Description: Map of tags to be assigned to all resources created by this module.
@@ -2330,6 +2408,28 @@ Description: Map of tags to be assigned to all resources created by this module.
 Tags are key-value pairs that help organize and manage Azure resources. These tags will be applied to all resources created by the module, enabling consistent resource governance, cost tracking, and operational management across the AI/ML landing zone infrastructure.
 
 Type: `map(string)`
+
+Default: `null`
+
+### <a name="input_timeouts"></a> [timeouts](#input\_timeouts)
+
+Description: Default per-operation timeouts applied to every supported AzAPI resource declared by the module. Defaults to `null` (provider defaults).
+
+- `create` - (Optional) Timeout for create operations.
+- `read` - (Optional) Timeout for read operations.
+- `update` - (Optional) Timeout for update operations.
+- `delete` - (Optional) Timeout for delete operations.
+
+Type:
+
+```hcl
+object({
+    create = optional(string)
+    read   = optional(string)
+    update = optional(string)
+    delete = optional(string)
+  })
+```
 
 Default: `null`
 
@@ -2472,7 +2572,7 @@ Description: Whether the returned handoff requests downstream Microsoft Foundry 
 
 ### <a name="output_hosted_agent_deployment"></a> [hosted\_agent\_deployment](#output\_hosted\_agent\_deployment)
 
-Description: Typed infrastructure handoff for a downstream Microsoft Foundry hosted-agent deployment. No data-plane agent identity or version is created by this module.
+Description: Typed infrastructure handoff for a downstream Microsoft Foundry hosted-agent deployment, including prerequisite role-assignment status. No data-plane agent identity or version is created by this module.
 
 ### <a name="output_hosted_agent_prepared"></a> [hosted\_agent\_prepared](#output\_hosted\_agent\_prepared)
 

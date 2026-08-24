@@ -45,7 +45,7 @@ Configuration for the Microsoft Foundry hosted-agent deployment handoff. This mo
 - `container_registry` - (Optional) Existing registry contract used when `genai_container_registry_definition.deploy` is false.
   - `existing_resource_id` - Resource ID of an existing Azure Container Registry.
   - `existing_endpoint` - Login endpoint of the existing registry, for example `contoso.azurecr.io`.
-  - `role_assignment_mode` - Registry permissions mode. Allowed values are `rbac` and `rbac-abac`. Default is `rbac`.
+  - `role_assignment_mode` - Registry permissions mode. `rbac` grants AcrPull; `rbac-abac` grants Container Registry Repository Reader. Default is `rbac`.
 
 The supported hosted-agent scenario is standalone with network isolation. Hub-spoke and public standalone Foundry topologies are intentionally excluded. The selected Foundry account must enable AI Agent Service, and the selected project must enable project connections.
 DESCRIPTION
@@ -67,7 +67,7 @@ DESCRIPTION
       !var.hosted_agent_definition.deploy
       ) || (
       var.hosted_agent_definition.project_key != null ?
-      contains(keys(var.ai_foundry_definition.ai_projects), var.hosted_agent_definition.project_key) :
+      contains(keys(var.ai_foundry_definition.ai_projects), trimspace(var.hosted_agent_definition.project_key)) :
       length(var.ai_foundry_definition.ai_projects) == 1
     )
     error_message = "Set project_key to a configured ai_foundry_definition.ai_projects key when hosted-agent prerequisites are enabled with multiple projects."
@@ -80,7 +80,7 @@ DESCRIPTION
       var.ai_foundry_definition.ai_foundry.create_ai_agent_service &&
       (
         var.hosted_agent_definition.project_key != null ?
-        try(var.ai_foundry_definition.ai_projects[var.hosted_agent_definition.project_key].create_project_connections, false) :
+        try(var.ai_foundry_definition.ai_projects[trimspace(var.hosted_agent_definition.project_key)].create_project_connections, false) :
         try(values(var.ai_foundry_definition.ai_projects)[0].create_project_connections, false)
       )
     )
@@ -100,7 +100,7 @@ DESCRIPTION
   validation {
     condition = (
       var.hosted_agent_definition.container_registry.existing_resource_id == null ||
-      can(provider::azapi::parse_resource_id("Microsoft.ContainerRegistry/registries", var.hosted_agent_definition.container_registry.existing_resource_id))
+      can(provider::azapi::parse_resource_id("Microsoft.ContainerRegistry/registries", trimspace(var.hosted_agent_definition.container_registry.existing_resource_id)))
     )
     error_message = "container_registry.existing_resource_id must be a valid Azure Container Registry resource ID."
   }
@@ -117,7 +117,7 @@ DESCRIPTION
   validation {
     condition = contains(
       ["rbac", "rbac-abac"],
-      var.hosted_agent_definition.container_registry.role_assignment_mode
+      lower(trimspace(var.hosted_agent_definition.container_registry.role_assignment_mode))
     )
     error_message = "container_registry.role_assignment_mode must be either `rbac` or `rbac-abac`."
   }
@@ -125,7 +125,7 @@ DESCRIPTION
     condition = !var.hosted_agent_definition.deploy || (
       trimspace(var.hosted_agent_definition.agent.name) != "" &&
       trimspace(var.hosted_agent_definition.agent.image) != "" &&
-      can(regex("^sha256:[0-9a-f]{64}$", var.hosted_agent_definition.agent.version))
+      can(regex("^sha256:[0-9a-f]{64}$", trimspace(var.hosted_agent_definition.agent.version)))
     )
     error_message = "Hosted-agent deployment requires a non-empty agent name and image plus an immutable sha256 digest."
   }

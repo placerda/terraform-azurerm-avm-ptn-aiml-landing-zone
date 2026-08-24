@@ -20,15 +20,8 @@ locals {
     local.genai_app_configuration_default_role_assignments,
     var.genai_app_configuration_definition.role_assignments
   )
-  genai_container_registry_default_role_assignments = local.foundry_hosted_agent_enabled && var.genai_container_registry_definition.deploy ? {
-    hosted_agent_project_pull = {
-      role_definition_id_or_name = "AcrPull"
-      principal_id               = module.foundry_ptn.ai_foundry_project_system_identity_principal_id[local.foundry_hosted_agent_project_key]
-      description                = "Allow the Microsoft Foundry project managed identity to pull hosted-agent images."
-      principal_type             = "ServicePrincipal"
-    }
-  } : {}
-  genai_container_registry_diagnostic_settings = var.genai_container_registry_definition.enable_diagnostic_settings ? (length(var.genai_container_registry_definition.diagnostic_settings) > 0 ? var.genai_container_registry_definition.diagnostic_settings : local.genai_container_registry_diagnostic_settings_inner) : {}
+  genai_container_registry_default_role_assignments = {}
+  genai_container_registry_diagnostic_settings      = var.genai_container_registry_definition.enable_diagnostic_settings ? (length(var.genai_container_registry_definition.diagnostic_settings) > 0 ? var.genai_container_registry_definition.diagnostic_settings : local.genai_container_registry_diagnostic_settings_inner) : {}
   genai_container_registry_diagnostic_settings_inner = (local.deploy_diagnostics_settings ? {
     sendToLogAnalytics = {
       name                                     = "sendToLogAnalytics-genai-acr-${random_string.name_suffix.result}"

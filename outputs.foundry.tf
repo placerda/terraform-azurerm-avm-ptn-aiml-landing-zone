@@ -47,14 +47,14 @@ output "deploy_hosted_agent" {
 }
 
 output "hosted_agent_deployment" {
-  description = "Typed infrastructure handoff for a downstream Microsoft Foundry hosted-agent deployment. No data-plane agent identity or version is created by this module."
+  description = "Typed infrastructure handoff for a downstream Microsoft Foundry hosted-agent deployment, including prerequisite role-assignment status. No data-plane agent identity or version is created by this module."
   value = {
     enabled = var.hosted_agent_definition.deploy
     agent = var.hosted_agent_definition.deploy ? {
-      name            = var.hosted_agent_definition.agent.name
+      name            = local.hosted_agent_name
       image           = local.hosted_agent_image_reference
-      image_version   = var.hosted_agent_definition.agent.version
-      startup_command = var.hosted_agent_definition.agent.startup_command
+      image_version   = local.hosted_agent_version
+      startup_command = local.hosted_agent_startup_command
       runtime         = var.hosted_agent_definition.agent.runtime
       protocols       = var.hosted_agent_definition.agent.protocols
     } : null
@@ -67,8 +67,15 @@ output "hosted_agent_deployment" {
     container_registry = local.foundry_hosted_agent_enabled ? {
       resource_id          = local.hosted_agent_container_registry_resource_id
       endpoint             = local.hosted_agent_container_registry_endpoint
-      role_assignment_mode = var.genai_container_registry_definition.deploy ? "rbac" : var.hosted_agent_definition.container_registry.role_assignment_mode
-      pull_role_prepared   = var.genai_container_registry_definition.deploy
+      role_assignment_mode = local.hosted_agent_registry_assignment_mode
+      pull_role_prepared   = local.foundry_hosted_agent_enabled ? try(azapi_resource.hosted_agent_registry_pull[0].id != null, false) : false
+      role_assignment_id   = local.foundry_hosted_agent_enabled ? try(azapi_resource.hosted_agent_registry_pull[0].id, null) : null
+    } : null
+    role_preparation = local.foundry_hosted_agent_enabled ? {
+      project_manager_role_prepared = try(azapi_resource.hosted_agent_project_manager[0].id != null, false)
+      project_manager_assignment_id = try(azapi_resource.hosted_agent_project_manager[0].id, null)
+      registry_pull_role_prepared   = try(azapi_resource.hosted_agent_registry_pull[0].id != null, false)
+      registry_pull_assignment_id   = try(azapi_resource.hosted_agent_registry_pull[0].id, null)
     } : null
     private_build = {
       required                 = local.foundry_hosted_agent_enabled
