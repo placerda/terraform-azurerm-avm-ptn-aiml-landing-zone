@@ -42,6 +42,7 @@ jobs:
       - name: Report proposal
         env:
           EVIDENCE_STATUS: ${{ steps.proposal.outputs.evidence_status }}
+          HANDOFF_DIGEST: ${{ steps.proposal.outputs.handoff_digest }}
           PROPOSAL_URL: ${{ steps.proposal.outputs.proposal_url }}
           TRACKER_URL: ${{ steps.proposal.outputs.tracker_url }}
         run: |
@@ -50,4 +51,5 @@ jobs:
           else
             echo "Proposal request: $TRACKER_URL"
           fi
+          echo "Dispatch-approved handoff digest: $HANDOFF_DIGEST"
           echo "Merge evidence status: $EVIDENCE_STATUS"

@@ -555,6 +555,35 @@ class IdempotencyTests(unittest.TestCase):
         parity_proposal.find_existing(client, payload, approved_handoff(payload))
         self.assertEqual([], client.posts)
 
+    def test_complete_issue_payload_assigns_canonical_copilot_agent(self):
+        payload = baseline_payload()
+        issue = parity_proposal.build_issue(payload, approved_handoff(payload), CURRENT_HEAD_SHA)
+        self.assertEqual(
+            {"title", "body", "assignees", "agent_assignment"},
+            set(issue),
+        )
+        self.assertEqual(["copilot-swe-agent[bot]"], issue["assignees"])
+        self.assertEqual(
+            {
+                "target_repo": parity_proposal.TARGET_REPOSITORY,
+                "base_branch": parity_proposal.TARGET_REF,
+                "custom_agent": "parity-proposal",
+                "custom_instructions": issue["agent_assignment"]["custom_instructions"],
+            },
+            issue["agent_assignment"],
+        )
+
+    def test_issue_propagates_dispatch_approved_digest(self):
+        payload = baseline_payload()
+        issue = parity_proposal.build_issue(payload, approved_handoff(payload), CURRENT_HEAD_SHA)
+        marker = parity_proposal.digest_marker(payload["handoffDigest"])
+        instructions = issue["agent_assignment"]["custom_instructions"]
+        self.assertIn(marker, issue["body"])
+        self.assertIn(marker, instructions)
+        self.assertIn(payload["handoffDigest"], issue["body"])
+        self.assertIn(payload["handoffDigest"], instructions)
+        self.assertIn("normalize CRLF and CR line endings to LF", instructions)
+
     def test_issue_instructions_create_draft_only_boundary(self):
         payload = baseline_payload()
         issue = parity_proposal.build_issue(payload, approved_handoff(payload), CURRENT_HEAD_SHA)
@@ -566,6 +595,7 @@ class IdempotencyTests(unittest.TestCase):
         self.assertIn("hub-spoke", text)
         self.assertIn(parity_proposal.proposal_marker(payload["handoffId"]), text)
         self.assertIn(parity_proposal.artifact_marker(payload["handoffCommitSha"]), text)
+        self.assertIn(parity_proposal.digest_marker(payload["handoffDigest"]), text)
         self.assertIn(parity_proposal.target_head_marker(CURRENT_HEAD_SHA), text)
         self.assertIn("Branch from current target `main` head", text)
         self.assertIn("PMNFR2", text)
@@ -595,7 +625,9 @@ class IdempotencyTests(unittest.TestCase):
                 False,
             )
             self.assertIn("evidence_status=blocked", output.read_text(encoding="utf-8"))
+            self.assertIn(f"handoff_digest=sha256:{payload['handoffDigest']}", output.read_text(encoding="utf-8"))
             self.assertIn("Merge evidence status: `blocked`", summary.read_text(encoding="utf-8"))
+            self.assertIn(f"sha256:{payload['handoffDigest']}", summary.read_text(encoding="utf-8"))
 
 
 class WorkflowSecurityTests(unittest.TestCase):
@@ -647,11 +679,14 @@ class WorkflowSecurityTests(unittest.TestCase):
             "upstream managed AVM CI",
             "release/*",
             "status `blocked`",
+            "parity-handoff-digest",
+            "copilot-swe-agent[bot]",
         ):
             self.assertIn(expected.lower(), combined)
 
     def test_workflow_reports_blocked_evidence_status(self):
         self.assertIn("steps.proposal.outputs.evidence_status", self.workflow)
+        self.assertIn("steps.proposal.outputs.handoff_digest", self.workflow)
         self.assertIn("Merge evidence status:", self.workflow)
 
 

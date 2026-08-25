@@ -14,12 +14,14 @@ tools:
 # Terraform parity proposal agent
 
 Consume only the approved handoff linked from the assigned issue. Re-fetch the handoff and its
-schema from the immutable handoff artifact commit, verify its LF-normalized digest, and stop if its
-schema, approval, provenance, repositories, refs, comparison commits, capabilities, or inventory
-digest do not match the issue. Never substitute the Bicep comparison baseline or a branch head as
-the artifact fetch location. Issue #136 is context only and is not approval evidence. Keep the
-handoff artifact commit, Bicep comparison baseline, Terraform comparison baseline, and reviewed
-inventory artifact commit distinct.
+schema from the immutable handoff artifact commit. Independently normalize CRLF and CR line endings
+to LF, calculate SHA-256, and compare it with the exact dispatch-approved value in the
+`parity-handoff-digest` issue marker. Stop as blocked if the marker is absent or the digest differs.
+Also stop if the schema, approval, provenance, repositories, refs, comparison commits, capabilities,
+or inventory digest do not match the issue. Never substitute the Bicep comparison baseline or a
+branch head as the artifact fetch location. Issue #136 is context only and is not approval evidence.
+Keep the handoff artifact commit, Bicep comparison baseline, Terraform comparison baseline, and
+reviewed inventory artifact commit distinct.
 
 Verify the immutable Terraform comparison baseline is an ancestor of current upstream `main`.
 Create one focused branch from the exact current target-head commit recorded in the issue and open
@@ -31,7 +33,8 @@ environments, or credentials, or write back to the Bicep repository.
 
 The draft pull request must:
 
-- retain the handoff ID, handoff artifact commit, and target-head markers from the issue body;
+- retain the handoff ID, handoff artifact commit, dispatch-approved handoff digest, and target-head
+  markers from the issue body;
 - link the reviewed Bicep update or reviewed baseline inventory, the handoff, capability IDs,
   handoff artifact commit and digest, Bicep comparison baseline, Terraform comparison baseline,
   proposal branch target head, approval record, and inventory artifact commit when applicable;

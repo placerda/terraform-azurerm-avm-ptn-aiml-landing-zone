@@ -46,10 +46,16 @@ and reviewed source PR; they do not infer or fetch an inventory from an implemen
 ## Idempotency and review
 
 Concurrency and idempotency are keyed by `handoffId`. Proposals carry the handoff ID, artifact
-commit, and target-head markers. A repeat with the same `handoffCommitSha` returns the existing URL.
-A changed artifact commit for the same ID posts one drift notice on the existing proposal and does
-not open a second. A new request assigns the repository's `parity-proposal` custom agent, which may
-create a focused branch from the recorded current `main` head and a draft pull request only.
+commit, dispatch-approved `sha256:<handoffDigest>`, and target-head markers. The generated issue and
+agent instructions require the agent to independently fetch the immutable artifact, normalize line
+endings to LF, and compare its SHA-256 with that trusted dispatch value. A repeat with the same
+`handoffCommitSha` returns the existing URL. A changed artifact commit for the same ID posts one
+drift notice on the existing proposal and does not open a second.
+
+A new REST issue payload uses GitHub's canonical Copilot coding-agent assignee
+`copilot-swe-agent[bot]` together with the repository's `parity-proposal` custom agent assignment.
+The agent may create a focused branch from the recorded current `main` head and a draft pull request
+only.
 
 The target pull request must preserve traceability, compatibility and migration analysis,
 semantic-version impact, both standalone scenarios, AVM checks, exact deferrals, and the `hub-spoke`
@@ -89,6 +95,8 @@ deploy, release, configure credentials, or claim parity.
 
 - Do not activate the dispatch path until the source coordination pull request is merged and its
   narrowly scoped GitHub App and protected publication environment are configured and reviewed.
+- Treat a live repository dispatch and successful Copilot assignment as external activation
+  validation; local contract tests do not prove that repository policies permit either operation.
 - Do not automatically write the proposal URL back to Bicep. That update requires a separate,
   approved source-repository contribution.
 - Do not merge, deploy, release, or claim parity from this workflow.

@@ -21,6 +21,7 @@ from typing import Any
 SOURCE_REPOSITORY = "Azure/bicep-ptn-aiml-landing-zone"
 TARGET_REPOSITORY = "Azure/terraform-azurerm-avm-ptn-aiml-landing-zone"
 TARGET_REF = "main"
+COPILOT_ASSIGNEE = "copilot-swe-agent[bot]"
 PAYLOAD_VERSION = "2.0.0"
 HANDOFF_REF = "develop"
 HANDOFF_SCHEMA_PATH = "parity/schemas/terraform-handoff.schema.json"
@@ -561,6 +562,10 @@ def artifact_marker(commit: str) -> str:
     return f"<!-- parity-handoff-commit: {commit} -->"
 
 
+def digest_marker(digest: str) -> str:
+    return f"<!-- parity-handoff-digest: sha256:{digest} -->"
+
+
 def target_head_marker(commit: str) -> str:
     return f"<!-- parity-target-head: {commit} -->"
 
@@ -635,6 +640,7 @@ def find_existing(client: GitHubClient, payload: dict[str, Any], handoff: dict[s
 def build_issue(payload: dict[str, Any], handoff: dict[str, Any], target_head: str) -> dict[str, Any]:
     marker = proposal_marker(payload["handoffId"])
     handoff_commit_marker = artifact_marker(payload["handoffCommitSha"])
+    handoff_digest_marker = digest_marker(payload["handoffDigest"])
     current_head_marker = target_head_marker(target_head)
     provenance_url = (
         payload["inventoryReviewUrl"]
@@ -644,12 +650,16 @@ def build_issue(payload: dict[str, Any], handoff: dict[str, Any], target_head: s
     prompt = f"""Implement the approved parity handoff `{payload['handoffId']}` as a focused, reviewable draft pull request.
 
 The handoff artifact is at `https://github.com/{SOURCE_REPOSITORY}/blob/{payload['handoffCommitSha']}/{payload['handoffPath']}`.
+Independently fetch that artifact, normalize CRLF and CR line endings to LF, calculate SHA-256, and
+require the result to equal the dispatch-approved digest `{payload['handoffDigest']}`. Stop as blocked
+if it differs.
 Branch from current target `main` head `{target_head}`. Compare against immutable Bicep baseline
 `{payload['sourceCommitSha']}` and Terraform baseline `{payload['targetCommitSha']}`. Follow
 `.github/agents/parity-proposal.agent.md`.
 Open a draft PR only; do not merge, deploy, release, publish, configure credentials, or claim parity.
-Include `{marker}`, `{handoff_commit_marker}`, and `{current_head_marker}` in the PR body so duplicate
-dispatches reconcile this exact proposal.
+Include `{marker}`, `{handoff_commit_marker}`, `{handoff_digest_marker}`, and
+`{current_head_marker}` in the PR body so duplicate dispatches reconcile this exact proposal and its
+trusted digest remains available for review.
 
 This repository remains an AVM Pattern Module and consciously takes a local exception to PMNFR2's
 Resource Module SHOULD: prefer direct Azure/azapi resources and focused local submodules. Compose an
@@ -661,14 +671,13 @@ skipped, or failed evidence must remain blocked, never success-shaped. For a for
 official owner-reviewed upstream `release/*`-branch-to-`main` flow for credentialed managed CI; never
 run that CI with credentials directly on the untrusted fork.
 """
-    body = f"""{marker}
-{handoff_commit_marker}
-{current_head_marker}
+    body = f"""{marker}\n{handoff_commit_marker}\n{handoff_digest_marker}\n{current_head_marker}
 
 ## Approved parity handoff
 
 - Handoff: [`{payload['handoffId']}`](https://github.com/{SOURCE_REPOSITORY}/blob/{payload['handoffCommitSha']}/{payload['handoffPath']})
 - Handoff artifact commit: `{payload['handoffCommitSha']}` (`{payload['handoffRef']}`)
+- Dispatch-approved handoff digest (LF-normalized SHA-256): `{payload['handoffDigest']}`
 - Provenance: [{payload['provenanceType']} `{payload['provenanceId']}`]({provenance_url})
 - Capabilities: {", ".join(f"`{item}`" for item in payload["capabilityIds"])}
 - Bicep comparison baseline: `{payload['sourceCommitSha']}`
@@ -707,6 +716,7 @@ unchecked and keep the proposal status **blocked**. Do not describe it as succes
     return {
         "title": f"Parity proposal: {payload['handoffId']}",
         "body": body,
+        "assignees": [COPILOT_ASSIGNEE],
         "agent_assignment": {
             "target_repo": TARGET_REPOSITORY,
             "base_branch": TARGET_REF,
@@ -730,6 +740,7 @@ def write_outputs(
         stream.write(f"tracker_url={tracker_url}\n")
         stream.write(f"duplicate={'true' if duplicate else 'false'}\n")
         stream.write(f"artifact_drift={'true' if artifact_drift else 'false'}\n")
+        stream.write(f"handoff_digest=sha256:{payload['handoffDigest']}\n")
         stream.write("evidence_status=blocked\n")
 
     result_url = proposal_url or tracker_url
@@ -737,6 +748,7 @@ def write_outputs(
     with open(summary_path, "a", encoding="utf-8", newline="\n") as stream:
         stream.write("## Terraform parity proposal\n\n")
         stream.write(f"- Handoff: `{payload['handoffId']}`\n")
+        stream.write(f"- Dispatch-approved handoff digest: `sha256:{payload['handoffDigest']}`\n")
         stream.write(f"- Result: [{result_label}]({result_url})\n")
         stream.write(f"- Duplicate delivery reconciled: `{'yes' if duplicate else 'no'}`\n")
         stream.write(f"- Artifact drift reported: `{'yes' if artifact_drift else 'no'}`\n")
