@@ -81,12 +81,16 @@ resource "azapi_resource" "network_security_rule" {
       sourcePortRanges                     = try(tolist(each.value.source_port_ranges), null)
     }
   }
+  create_headers         = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  delete_headers         = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
   ignore_body_changes    = length(var.ignore_body_changes.network_network_security_groups_security_rules) > 0 ? var.ignore_body_changes.network_network_security_groups_security_rules : null
+  read_headers           = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
   response_export_values = []
   retry                  = var.retry
+  update_headers         = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
 
   dynamic "timeouts" {
-    for_each = coalesce(try(each.value.timeouts, null), var.timeouts) == null ? [] : [coalesce(try(each.value.timeouts, null), var.timeouts)]
+    for_each = try(each.value.timeouts, null) != null ? [each.value.timeouts] : var.timeouts == null ? [] : [var.timeouts]
 
     content {
       create = timeouts.value.create
@@ -95,10 +99,6 @@ resource "azapi_resource" "network_security_rule" {
       update = timeouts.value.update
     }
   }
-  read_headers   = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
-  update_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
-  create_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
-  delete_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
 }
 
 #TODO: Add the platform landing zone flag as a secondary decision point for the hub vnet peering?
@@ -137,9 +137,13 @@ resource "azapi_resource" "virtual_hub_connection" {
       }
     }
   }
+  create_headers         = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  delete_headers         = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
   ignore_body_changes    = length(var.ignore_body_changes.network_virtual_hubs_hub_virtual_network_connections) > 0 ? var.ignore_body_changes.network_virtual_hubs_hub_virtual_network_connections : null
+  read_headers           = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
   response_export_values = []
   retry                  = var.retry
+  update_headers         = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
 
   dynamic "timeouts" {
     for_each = var.timeouts == null ? [] : [var.timeouts]
@@ -150,10 +154,6 @@ resource "azapi_resource" "virtual_hub_connection" {
       delete = timeouts.value.delete
     }
   }
-  create_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
-  delete_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
-  read_headers   = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
-  update_headers = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
 }
 
 module "firewall_route_table" {
