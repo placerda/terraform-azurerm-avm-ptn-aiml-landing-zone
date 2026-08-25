@@ -70,9 +70,9 @@ locals {
 
   application_platform_additional_settings = {
     for key, setting in var.application_platform.additional_app_configuration_settings :
-    key => {
+    (setting.label != null ? setting.label : var.application_platform.app_config_label) == "" ? key : format("%s$%s", key, setting.label != null ? setting.label : var.application_platform.app_config_label) => {
       value        = setting.value
-      label        = coalesce(setting.label, var.application_platform.app_config_label)
+      label        = setting.label != null ? setting.label : var.application_platform.app_config_label
       content_type = setting.content_type
     }
   }
@@ -80,7 +80,7 @@ locals {
   application_platform_app_config_settings = merge(
     {
       for key, value in local.application_platform_runtime_settings :
-      key => {
+      var.application_platform.app_config_label == "" ? key : format("%s$%s", key, var.application_platform.app_config_label) => {
         value        = value
         label        = var.application_platform.app_config_label
         content_type = "text/plain"

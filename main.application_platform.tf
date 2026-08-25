@@ -311,7 +311,7 @@ resource "azapi_resource" "application_platform_container_app" {
 resource "azapi_resource" "application_platform_app_configuration_key_value" {
   for_each = var.application_platform.populate_app_configuration && var.genai_app_configuration_definition.deploy ? local.application_platform_app_config_settings : {}
 
-  name      = format("%s$%s", each.key, each.value.label)
+  name      = each.key
   parent_id = module.app_configuration[0].resource_id
   type      = var.resource_types.appconfiguration_configuration_stores_key_values
   body = {

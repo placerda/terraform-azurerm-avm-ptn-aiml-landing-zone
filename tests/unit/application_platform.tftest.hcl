@@ -92,7 +92,7 @@ run "uses_configured_app_configuration_labels" {
   }
 
   assert {
-    condition     = azapi_resource.application_platform_app_configuration_key_value["CUSTOM_SETTING"].name == "CUSTOM_SETTING$custom-label"
+    condition     = azapi_resource.application_platform_app_configuration_key_value["CUSTOM_SETTING$custom-label"].name == "CUSTOM_SETTING$custom-label"
     error_message = "App Configuration key-value resource names must include the configured label."
   }
 
@@ -103,6 +103,58 @@ run "uses_configured_app_configuration_labels" {
       contains(keys(time_sleep.application_platform_app_config_rbac[0].triggers), "role_assignment")
     )
     error_message = "App Configuration key-value writes must have a bounded barrier triggered by the deployment principal's Data Owner assignment."
+  }
+}
+
+run "preserves_same_app_configuration_key_with_distinct_labels" {
+  command = plan
+
+  variables {
+    application_platform = {
+      populate_app_configuration = true
+      additional_app_configuration_settings = {
+        APP_CONFIG_NAME = {
+          value = "custom-name"
+          label = "custom-label"
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      contains(keys(azapi_resource.application_platform_app_configuration_key_value), "APP_CONFIG_NAME$ai-lz") &&
+      contains(keys(azapi_resource.application_platform_app_configuration_key_value), "APP_CONFIG_NAME$custom-label") &&
+      azapi_resource.application_platform_app_configuration_key_value["APP_CONFIG_NAME$ai-lz"].name == "APP_CONFIG_NAME$ai-lz" &&
+      azapi_resource.application_platform_app_configuration_key_value["APP_CONFIG_NAME$custom-label"].name == "APP_CONFIG_NAME$custom-label"
+    )
+    error_message = "App Configuration settings with the same key and distinct labels must create distinct key-value resources."
+  }
+}
+
+run "handles_exact_app_configuration_identity_duplicates_deterministically" {
+  command = plan
+
+  variables {
+    application_platform = {
+      app_config_label           = ""
+      populate_app_configuration = true
+      additional_app_configuration_settings = {
+        APP_CONFIG_NAME = {
+          value = "consumer-override"
+          label = null
+        }
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      length([for identity in keys(azapi_resource.application_platform_app_configuration_key_value) : identity if identity == "APP_CONFIG_NAME"]) == 1 &&
+      azapi_resource.application_platform_app_configuration_key_value["APP_CONFIG_NAME"].name == "APP_CONFIG_NAME" &&
+      azapi_resource.application_platform_app_configuration_key_value["APP_CONFIG_NAME"].body.properties.value == "consumer-override"
+    )
+    error_message = "An exact key and empty-label duplicate must resolve to one bare-key resource with the additional setting taking precedence."
   }
 }
 
