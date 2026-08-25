@@ -1,7 +1,7 @@
 # ADR 0001: Preserve state while migrating direct resources to AzAPI
 
 - Status: Accepted
-- Date: 2026-02-23
+- Date: 2026-08-25
 
 ## Context
 

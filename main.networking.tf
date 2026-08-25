@@ -137,10 +137,13 @@ resource "azapi_resource" "virtual_hub_connection" {
       }
     }
   }
-  create_headers         = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
-  delete_headers         = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
-  ignore_body_changes    = length(var.ignore_body_changes.network_virtual_hubs_hub_virtual_network_connections) > 0 ? var.ignore_body_changes.network_virtual_hubs_hub_virtual_network_connections : null
-  read_headers           = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  create_headers      = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  delete_headers      = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  ignore_body_changes = length(var.ignore_body_changes.network_virtual_hubs_hub_virtual_network_connections) > 0 ? var.ignore_body_changes.network_virtual_hubs_hub_virtual_network_connections : null
+  read_headers        = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
+  replace_triggers_refs = [
+    "properties.remoteVirtualNetwork.id",
+  ]
   response_export_values = []
   retry                  = var.retry
   update_headers         = var.enable_telemetry ? { "User-Agent" : local.avm_azapi_header } : null
